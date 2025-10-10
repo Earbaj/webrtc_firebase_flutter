@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "158278300192",
+    "project_id": "flutterwebrtc-2dc24",
+    "storage_bucket": "flutterwebrtc-2dc24.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:158278300192:android:5cea17130fdcf2ba208245",
+        "android_client_info": {
+          "package_name": "com.example.webrtc_flutter"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCJJ7j6vUb1CJ-FlPmnrhXhGyi_-NMvtt0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
