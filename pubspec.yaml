@@ -37,6 +37,7 @@ dependencies:
   flutter_webrtc: ^0.9.48
   cloud_firestore: ^4.9.5
   firebase_core: ^2.15.1
+  firebase_auth: ^4.17.3
 
 dev_dependencies:
   flutter_test:
