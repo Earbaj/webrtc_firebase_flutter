@@ -10,6 +10,7 @@ import 'package:webrtc_flutter/screen/auth_screen.dart';
 import 'package:webrtc_flutter/screen/user_list_screen.dart';
 import 'package:webrtc_flutter/screen/video_call_screen.dart';
 
+import 'controller/auth_controller_riverpod.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -48,6 +49,7 @@ class MyApp extends StatelessWidget {
 }
 
 
+//auth wrapper in traditional way
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
 
@@ -71,6 +73,28 @@ class AuthWrapper extends StatelessWidget {
           // User is not logged in
           return const AuthScreen();
         }
+      },
+    );
+  }
+}
+
+// auth_wrapper from river pod way
+class RiverPodAuthWrapper extends ConsumerWidget {
+  const RiverPodAuthWrapper({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authStateChangesProvider);
+
+    return authState.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (error, stack) => Scaffold(
+        body: Center(child: Text('Error: $error')),
+      ),
+      data: (user) {
+        return user == null ? const AuthScreen() : const UsersListScreen();
       },
     );
   }
