@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'dart:async';
+import '../service/socket_service.dart';
 
 class VideoCallScreen extends StatefulWidget {
   final String roomId;
   final bool isVideo;
   final bool isJoining;
-  final String? receiverId;
+  final SocketService socketService;
+  final String? callerId;
   final String? receiverName;
 
   const VideoCallScreen({
@@ -16,7 +18,8 @@ class VideoCallScreen extends StatefulWidget {
     required this.roomId,
     required this.isVideo,
     required this.isJoining,
-    this.receiverId,
+    required this.socketService,
+    this.callerId,
     this.receiverName,
   });
 
@@ -28,7 +31,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   final Map<String, dynamic> _configuration = {
     "iceServers": [
       {"urls": "stun:stun.l.google.com:19302"},
-    ]
+    ],
+    'sdpSemantics': 'unified-plan',
+    'iceTransportPolicy': 'all',
   };
 
   RTCPeerConnection? _peerConnection;
@@ -36,20 +41,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   bool _isConnected = false;
-  bool _isNegotiating = false;
   bool _isMicMuted = false;
   bool _isVideoOff = false;
-
-  StreamSubscription<DocumentSnapshot>? _roomSubscription;
-  StreamSubscription<QuerySnapshot>? _answerCandidatesSubscription;
-  StreamSubscription<QuerySnapshot>? _offerCandidatesSubscription;
-  StreamSubscription<DocumentSnapshot>? _callSubscription;
-
+  DateTime? _callStartTime;
+  String _callDurationDisplay = '00:00';
+  Timer? _durationTimer;
   Timer? _connectionTimeout;
+  bool _isDisposed = false;
+  bool _hasRemoteStream = false;
 
   @override
   void initState() {
@@ -59,115 +61,167 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _cleanup();
     super.dispose();
   }
 
   Future<void> _initializeCall() async {
-    await _initializeRenderers();
-    await _getUserMedia();
-    await _createPeerConnection();
+    try {
+      print('🔄 Initializing WebRTC...');
+      await _initializeRenderers();
+      await _getUserMedia();
+      await _createPeerConnection();
+      _setupSocketListeners();
 
-    if (widget.isJoining) {
-      // Joining existing call
-      await _joinRoom();
-    } else {
-      // Creating new call
-      await _createRoom();
-      _listenForCallStatus();
+      if (widget.isJoining) {
+        print('📥 Joining as receiver - waiting for offer');
+        _requestOffer();
+      } else {
+        print('📤 Creating as caller - sending offer');
+        await _createAndSendOffer();
+      }
+
+      _startCallTimer();
+    } catch (e) {
+      print('❌ Initialization error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
     }
   }
 
-  void _listenForCallStatus() {
-    if (widget.receiverId != null) {
-      _callSubscription = _firestore
-          .collection('calls')
-          .doc(widget.receiverId)
-          .snapshots()
-          .listen((snapshot) {
-        if (snapshot.exists && mounted) {
-          final data = snapshot.data()!;
-          final status = data['status'] as String?;
+  void _setupSocketListeners() {
+    print('Setting up socket listeners...');
 
-          if (status == 'rejected') {
-            _showCallRejected();
-          } else if (status == 'accepted') {
-            print('✅ Call accepted by ${widget.receiverName}');
-          }
+    // Receive offer (for receiver/callee)
+    widget.socketService.onWebRtcOffer = (data) async {
+      print('📥 Received WebRTC offer');
+      if (data['roomId'] != widget.roomId || _peerConnection == null) return;
+
+      try {
+        final offer = RTCSessionDescription(
+          data['offer']['sdp'],
+          data['offer']['type'],
+        );
+
+        await _peerConnection!.setRemoteDescription(offer);
+        print('✅ Set remote description (offer)');
+
+        final answer = await _peerConnection!.createAnswer();
+        await _peerConnection!.setLocalDescription(answer);
+        print('✅ Created answer');
+
+        // Use the SocketService method
+        widget.socketService.sendWebRtcAnswer(
+          roomId: widget.roomId,
+          answer: {
+            'type': answer.type,
+            'sdp': answer.sdp,
+          },
+          receiverId: _auth.currentUser!.uid,
+          callerId: data['callerId'],
+        );
+        print('📤 Sent answer');
+
+      } catch (e) {
+        print('❌ Error handling offer: $e');
+      }
+    };
+
+    // Receive answer (for caller)
+    widget.socketService.onWebRtcAnswer = (data) async {
+      print('📥 Received WebRTC answer');
+      if (data['roomId'] != widget.roomId || _peerConnection == null) return;
+
+      try {
+        final answer = RTCSessionDescription(
+          data['answer']['sdp'],
+          data['answer']['type'],
+        );
+
+        await _peerConnection!.setRemoteDescription(answer);
+        print('✅ Set remote description (answer)');
+
+      } catch (e) {
+        print('❌ Error setting remote description: $e');
+      }
+    };
+
+    // Receive ICE candidates
+    widget.socketService.onWebRtcIceCandidate = (data) async {
+      if (data['roomId'] != widget.roomId ||
+          data['senderId'] == _auth.currentUser!.uid ||
+          _peerConnection == null) return;
+
+      try {
+        final candidate = RTCIceCandidate(
+          data['candidate']['candidate'],
+          data['candidate']['sdpMid'],
+          data['candidate']['sdpMLineIndex'],
+        );
+        await _peerConnection!.addCandidate(candidate);
+        print('✅ Added ICE candidate');
+      } catch (e) {
+        print('❌ Error adding ICE candidate: $e');
+      }
+    };
+
+    // Call ended by remote user
+    widget.socketService.onCallEnded = (_) {
+      print('📞 Remote user ended call');
+      if (mounted && !_isDisposed) {
+        Navigator.pop(context);
+      }
+    };
+  }
+
+  void _requestOffer() {
+    print('📋 Requesting offer from caller...');
+    widget.socketService.requestOffer(
+      roomId: widget.roomId,
+      receiverId: _auth.currentUser!.uid,
+    );
+
+    _connectionTimeout = Timer(const Duration(seconds: 250), () {
+      if (!_isConnected && mounted && !_isDisposed) {
+        print('⏰ Timeout waiting for offer');
+        _showTimeout();
+      }
+    });
+  }
+
+  Future<void> _createAndSendOffer() async {
+    if (_isDisposed || _peerConnection == null) return;
+
+    try {
+      final offer = await _peerConnection!.createOffer();
+      await _peerConnection!.setLocalDescription(offer);
+      print('✅ Created offer');
+
+      // Use the SocketService method instead of direct emit
+      widget.socketService.sendWebRtcOffer(
+        roomId: widget.roomId,
+        offer: {
+          'type': offer.type,
+          'sdp': offer.sdp,
+        },
+        callerId: _auth.currentUser!.uid,
+        receiverId: widget.callerId ?? '',
+      );
+
+      _connectionTimeout = Timer(const Duration(seconds: 250), () {
+        if (!_isConnected && mounted && !_isDisposed) {
+          print('⏰ Timeout waiting for answer');
+          _showTimeout();
         }
       });
 
-      // Auto timeout after 30 seconds if not accepted
-      _connectionTimeout = Timer(const Duration(seconds: 30), () {
-        if (!_isConnected && mounted) {
-          _showCallTimeout();
-        }
-      });
+    } catch (e) {
+      print('❌ Error creating offer: $e');
     }
-  }
-
-  void _showCallRejected() {
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Text('Call Rejected'),
-          content: Text('${widget.receiverName} rejected the call'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.pop(context);
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
-  void _showCallTimeout() {
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Text('No Answer'),
-          content: Text('${widget.receiverName} did not answer'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.pop(context);
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
-  void _cleanup() {
-    _connectionTimeout?.cancel();
-    _roomSubscription?.cancel();
-    _answerCandidatesSubscription?.cancel();
-    _offerCandidatesSubscription?.cancel();
-    _callSubscription?.cancel();
-    _localRenderer.dispose();
-    _remoteRenderer.dispose();
-    _localStream?.dispose();
-    _peerConnection?.close();
-
-    // Clean up call document
-    if (widget.receiverId != null && !widget.isJoining) {
-      _firestore.collection('calls').doc(widget.receiverId).delete();
-    }
-
-    // Clean up room
-    _firestore.collection('rooms').doc(widget.roomId).delete();
   }
 
   Future<void> _initializeRenderers() async {
@@ -176,16 +230,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   Future<void> _getUserMedia() async {
-    final Map<String, dynamic> constraints = {
-      "audio": true,
+    final constraints = {
+      "audio": {
+        "echoCancellation": true,
+        "noiseSuppression": true,
+        "autoGainControl": true,
+      },
       "video": widget.isVideo
           ? {
-        'mandatory': {
-          'minWidth': '640',
-          'minHeight': '480',
-          'minFrameRate': '30',
-        },
-        'optional': [],
+        "width": {"ideal": 640},
+        "height": {"ideal": 480},
+        "frameRate": {"ideal": 30},
       }
           : false,
     };
@@ -193,230 +248,156 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     try {
       _localStream = await navigator.mediaDevices.getUserMedia(constraints);
       _localRenderer.srcObject = _localStream;
-      print('🎥 Media accessed successfully');
+      print('✅ Media access granted');
     } catch (e) {
-      print('❌ Error getting user media: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Media access failed: $e')),
-        );
-      }
+      print('❌ Error getting media: $e');
+      rethrow;
     }
   }
 
   Future<void> _createPeerConnection() async {
-    _peerConnection = await createPeerConnection(_configuration);
-
-    _peerConnection!.onTrack = (RTCTrackEvent event) {
-      print('🎬 Remote track received');
-      if (event.streams.isNotEmpty && mounted) {
-        setState(() {
-          _remoteRenderer.srcObject = event.streams[0];
-          _isConnected = true;
-        });
-        _connectionTimeout?.cancel();
-      }
-    };
-
-    _peerConnection!.onIceCandidate = (RTCIceCandidate? candidate) {
-      if (candidate != null) {
-        print('📤 Sending ICE candidate');
-        final collection = widget.isJoining ? 'answerCandidates' : 'offerCandidates';
-        _firestore
-            .collection('rooms')
-            .doc(widget.roomId)
-            .collection(collection)
-            .add(candidate.toMap());
-      }
-    };
-
-    _peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
-      print('🌐 ICE connection state: $state');
-      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
-        setState(() => _isConnected = true);
-      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
-          state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        setState(() => _isConnected = false);
-      }
-    };
-
-    if (_localStream != null) {
-      _localStream!.getTracks().forEach((track) {
-        _peerConnection?.addTrack(track, _localStream!);
-      });
-    }
-  }
-
-  Future<void> _createRoom() async {
-    setState(() => _isNegotiating = true);
-
     try {
-      final Map<String, dynamic> offerConstraints = {
-        'mandatory': {
-          'OfferToReceiveAudio': true,
-          'OfferToReceiveVideo': widget.isVideo,
-        },
-        'optional': [],
+      _peerConnection = await createPeerConnection(_configuration);
+
+      if (_peerConnection == null) {
+        throw Exception('Failed to create peer connection');
+      }
+
+      // Handle remote track (remote video/audio)
+      _peerConnection!.onTrack = (RTCTrackEvent event) {
+        print('🎬 Received remote track: ${event.track.kind}');
+        if (event.streams.isNotEmpty && mounted && !_isDisposed) {
+          setState(() {
+            _remoteRenderer.srcObject = event.streams[0];
+            _hasRemoteStream = true;
+            _isConnected = true;
+          });
+          _connectionTimeout?.cancel();
+          print('✅ Remote stream connected!');
+        }
       };
 
-      final RTCSessionDescription offer =
-      await _peerConnection!.createOffer(offerConstraints);
-      await _peerConnection!.setLocalDescription(offer);
-
-      await _firestore.collection('rooms').doc(widget.roomId).update({
-        'offer': {
-          'type': offer.type,
-          'sdp': offer.sdp,
-        },
-      });
-
-      print('✅ Offer created and saved');
-
-      // Listen for answer
-      _roomSubscription = _firestore
-          .collection('rooms')
-          .doc(widget.roomId)
-          .snapshots()
-          .listen((snapshot) async {
-        if (snapshot.exists && mounted) {
-          final data = snapshot.data()!;
-          if (data.containsKey('answer')) {
-            final remoteDesc = await _peerConnection!.getRemoteDescription();
-            if (remoteDesc == null) {
-              final RTCSessionDescription answer = RTCSessionDescription(
-                data['answer']['sdp'],
-                data['answer']['type'],
-              );
-
-              await _peerConnection!.setRemoteDescription(answer);
-              print('✅ Remote description set');
-
-              if (mounted) {
-                setState(() => _isNegotiating = false);
-              }
-            }
-          }
+      // Send local ICE candidates to peer
+      _peerConnection!.onIceCandidate = (RTCIceCandidate? candidate) {
+        if (candidate != null) {
+          widget.socketService.sendIceCandidate(
+            roomId: widget.roomId,
+            candidate: {
+              'candidate': candidate.candidate,
+              'sdpMid': candidate.sdpMid,
+              'sdpMLineIndex': candidate.sdpMLineIndex,
+            },
+            senderId: _auth.currentUser!.uid,
+          );
         }
-      });
+      };
 
-      // Listen for answer ICE candidates
-      _answerCandidatesSubscription = _firestore
-          .collection('rooms')
-          .doc(widget.roomId)
-          .collection('answerCandidates')
-          .snapshots()
-          .listen((snapshot) {
-        for (var change in snapshot.docChanges) {
-          if (change.type == DocumentChangeType.added) {
-            final candidateData = change.doc.data()!;
-            _peerConnection!.addCandidate(RTCIceCandidate(
-              candidateData['candidate'],
-              candidateData['sdpMid'],
-              candidateData['sdpMLineIndex'],
-            ));
-            print('✅ Added answer ICE candidate');
-          }
+      // Monitor ICE connection state
+      _peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
+        print('🌐 ICE state: $state');
+        if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+            state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+          setState(() => _isConnected = true);
         }
-      });
-    } catch (e) {
-      print('❌ Error creating room: $e');
-      if (mounted) {
-        setState(() => _isNegotiating = false);
+      };
+
+      // Add local tracks to connection
+      if (_localStream != null) {
+        for (final track in _localStream!.getTracks()) {
+          await _peerConnection!.addTrack(track, _localStream!);
+        }
+        print('✅ Added local tracks');
       }
+
+      print('✅ Peer connection created');
+    } catch (e) {
+      print('❌ Error creating peer connection: $e');
+      rethrow;
     }
   }
 
-  Future<void> _joinRoom() async {
-    setState(() => _isNegotiating = true);
-
-    try {
-      final roomSnapshot =
-      await _firestore.collection('rooms').doc(widget.roomId).get();
-
-      if (!roomSnapshot.exists) {
-        throw Exception('Room not found');
+  void _startCallTimer() {
+    _callStartTime = DateTime.now();
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && !_isDisposed && _callStartTime != null) {
+        final duration = DateTime.now().difference(_callStartTime!);
+        setState(() {
+          _callDurationDisplay =
+          '${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}';
+        });
       }
+    });
+  }
 
-      final data = roomSnapshot.data()!;
-      final RTCSessionDescription offer = RTCSessionDescription(
-        data['offer']['sdp'],
-        data['offer']['type'],
+  void _cleanup() {
+    _durationTimer?.cancel();
+    _connectionTimeout?.cancel();
+
+    // Clear socket callbacks
+    widget.socketService.onWebRtcOffer = null;
+    widget.socketService.onWebRtcAnswer = null;
+    widget.socketService.onWebRtcIceCandidate = null;
+    widget.socketService.onCallEnded = null;
+    // Remove listeners
+    widget.socketService.socket.off('webrtc:offer');
+    widget.socketService.socket.off('webrtc:answer');
+    widget.socketService.socket.off('webrtc:ice-candidate');
+    widget.socketService.socket.off('call:ended');
+
+    // Notify server
+    if (_callStartTime != null) {
+      final duration = DateTime.now().difference(_callStartTime!).inSeconds;
+      widget.socketService.endCall(
+        callerId: _auth.currentUser!.uid,
+        receiverId: widget.callerId ?? '',
+        roomId: widget.roomId,
+        duration: duration,
+        isVideoCall: widget.isVideo,
       );
-
-      await _peerConnection!.setRemoteDescription(offer);
-      print('✅ Remote description set');
-
-      // Listen for offer ICE candidates
-      _offerCandidatesSubscription = _firestore
-          .collection('rooms')
-          .doc(widget.roomId)
-          .collection('offerCandidates')
-          .snapshots()
-          .listen((snapshot) {
-        for (var change in snapshot.docChanges) {
-          if (change.type == DocumentChangeType.added) {
-            final candidateData = change.doc.data()!;
-            _peerConnection!.addCandidate(RTCIceCandidate(
-              candidateData['candidate'],
-              candidateData['sdpMid'],
-              candidateData['sdpMLineIndex'],
-            ));
-            print('✅ Added offer ICE candidate');
-          }
-        }
-      });
-
-      final RTCSessionDescription answer = await _peerConnection!.createAnswer();
-      await _peerConnection!.setLocalDescription(answer);
-
-      await _firestore.collection('rooms').doc(widget.roomId).update({
-        'answer': {
-          'type': answer.type,
-          'sdp': answer.sdp,
-        },
-        'status': 'connected',
-      });
-
-      print('✅ Answer sent');
-
-      if (mounted) {
-        setState(() => _isNegotiating = false);
-      }
-    } catch (e) {
-      print('❌ Error joining room: $e');
-      if (mounted) {
-        setState(() => _isNegotiating = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to join: $e')),
-        );
-      }
     }
+
+    // Stop tracks
+    _localStream?.getTracks().forEach((track) => track.stop());
+    _localStream?.dispose();
+
+    _peerConnection?.close();
+    _localRenderer.dispose();
+    _remoteRenderer.dispose();
   }
 
   void _toggleMic() {
-    if (_localStream != null) {
-      final audioTracks = _localStream!.getAudioTracks();
-      if (audioTracks.isNotEmpty) {
-        final enabled = !audioTracks[0].enabled;
-        audioTracks[0].enabled = enabled;
-        setState(() => _isMicMuted = !enabled);
-      }
-    }
+    if (_localStream == null) return;
+    setState(() => _isMicMuted = !_isMicMuted);
+    _localStream!.getAudioTracks().forEach((track) {
+      track.enabled = !_isMicMuted;
+    });
   }
 
   void _toggleVideo() {
-    if (_localStream != null && widget.isVideo) {
-      final videoTracks = _localStream!.getVideoTracks();
-      if (videoTracks.isNotEmpty) {
-        final enabled = !videoTracks[0].enabled;
-        videoTracks[0].enabled = enabled;
-        setState(() => _isVideoOff = !enabled);
-      }
-    }
+    if (_localStream == null || !widget.isVideo) return;
+    setState(() => _isVideoOff = !_isVideoOff);
+    _localStream!.getVideoTracks().forEach((track) {
+      track.enabled = !_isVideoOff;
+    });
   }
 
-  void _endCall() {
-    Navigator.pop(context);
+  void _showTimeout() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Connection Timeout'),
+        content: const Text('Failed to establish connection'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pop(context);
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -426,183 +407,136 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Remote Video (Full Screen)
-            if (_remoteRenderer.srcObject != null)
-              Positioned.fill(
-                child: RTCVideoView(
-                  _remoteRenderer,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                ),
-              )
-            else
-              Container(
-                color: Colors.black,
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircleAvatar(
-                        radius: 60,
-                        backgroundColor: Colors.grey.shade800,
-                        child: Icon(
-                          widget.isVideo ? Icons.videocam_off : Icons.call,
-                          size: 60,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        widget.isJoining ? 'Connecting...' : 'Calling ${widget.receiverName}...',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                        ),
-                      ),
-                      if (_isNegotiating)
-                        const Padding(
-                          padding: EdgeInsets.all(20.0),
-                          child: CircularProgressIndicator(color: Colors.white),
-                        ),
-                    ],
+            // Remote video
+            // Remote video (full screen)
+            Positioned.fill(
+              child: _hasRemoteStream && widget.isVideo && !_isVideoOff
+                  ? Stack(
+                children: [
+                  RTCVideoView(
+                    _remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                   ),
-                ),
-              ),
+                  // Debug overlay
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      color: Colors.black54,
+                      child: Text(
+                        'Remote: ${_remoteRenderer.srcObject != null ? "Active" : "Null"}',
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+                  : _buildAudioView(),
+            ),
+            // Positioned.fill(
+            //   child: _hasRemoteStream && widget.isVideo && !_isVideoOff
+            //       ? RTCVideoView(
+            //     _remoteRenderer,
+            //     objectFit:
+            //     RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+            //   )
+            //       : _buildAudioView(),
+            // ),
 
-            // Local Video (Picture-in-Picture)
-            if (widget.isVideo && _localRenderer.srcObject != null)
+            // Local video (PiP)
+            if (widget.isVideo && !_isVideoOff && _localStream != null)
               Positioned(
-                top: 20,
+                top: 60,
                 right: 20,
                 child: Container(
                   width: 120,
                   height: 160,
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white, width: 2),
                     borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white, width: 2),
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(10),
-                    child: _isVideoOff
-                        ? Container(
-                      color: Colors.grey.shade900,
-                      child: const Center(
-                        child: Icon(
-                          Icons.videocam_off,
-                          color: Colors.white,
-                          size: 40,
-                        ),
-                      ),
-                    )
-                        : RTCVideoView(
+                    child: RTCVideoView(
                       _localRenderer,
                       mirror: true,
-                      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      objectFit:
+                      RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                     ),
                   ),
                 ),
               ),
 
-            // Top Bar - User Info
+            // Call info
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
+              top: 60,
+              left: 20,
+              right: 20,
               child: Container(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(0.7),
-                      Colors.transparent,
-                    ],
-                  ),
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                child: Row(
+                child: Column(
                   children: [
-                    if (!widget.isJoining) ...[
-                      CircleAvatar(
-                        backgroundColor: Colors.blue,
-                        child: Text(
-                          widget.receiverName?.substring(0, 1).toUpperCase() ?? 'U',
-                          style: const TextStyle(color: Colors.white),
-                        ),
+                    Text(
+                      widget.receiverName ?? 'Connecting...',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.receiverName ?? 'Unknown',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            _isConnected ? 'Connected' : 'Connecting...',
-                            style: TextStyle(
-                              color: _isConnected ? Colors.green : Colors.orange,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _isConnected ? _callDurationDisplay : 'Connecting...',
+                      style: const TextStyle(color: Colors.white),
+                    ),
                   ],
                 ),
               ),
             ),
 
-            // Bottom Controls
+            // Controls
             Positioned(
-              bottom: 0,
+              bottom: 40,
               left: 0,
               right: 0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 30),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Colors.black.withOpacity(0.8),
-                      Colors.transparent,
-                    ],
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  // Mute
+                  FloatingActionButton(
+                    onPressed: _toggleMic,
+                    backgroundColor:
+                    _isMicMuted ? Colors.red : Colors.blue,
+                    child: Icon(
+                      _isMicMuted ? Icons.mic_off : Icons.mic,
+                      color: Colors.white,
+                    ),
                   ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Mute/Unmute Mic
-                    _buildControlButton(
-                      icon: _isMicMuted ? Icons.mic_off : Icons.mic,
-                      label: _isMicMuted ? 'Unmute' : 'Mute',
-                      onPressed: _toggleMic,
-                      color: _isMicMuted ? Colors.red : Colors.white,
-                    ),
 
-                    // Toggle Video (only for video calls)
-                    if (widget.isVideo)
-                      _buildControlButton(
-                        icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
-                        label: _isVideoOff ? 'Video On' : 'Video Off',
-                        onPressed: _toggleVideo,
-                        color: _isVideoOff ? Colors.red : Colors.white,
+                  // End call
+                  FloatingActionButton(
+                    onPressed: () => Navigator.pop(context),
+                    backgroundColor: Colors.red,
+                    child: const Icon(Icons.call_end, color: Colors.white),
+                  ),
+
+                  // Toggle video
+                  if (widget.isVideo)
+                    FloatingActionButton(
+                      onPressed: _toggleVideo,
+                      backgroundColor:
+                      _isVideoOff ? Colors.red : Colors.blue,
+                      child: Icon(
+                        _isVideoOff ? Icons.videocam_off : Icons.videocam,
+                        color: Colors.white,
                       ),
-
-                    // End Call
-                    _buildControlButton(
-                      icon: Icons.call_end,
-                      label: 'End Call',
-                      onPressed: _endCall,
-                      color: Colors.red,
-                      size: 70,
                     ),
-                  ],
-                ),
+                ],
               ),
             ),
           ],
@@ -611,47 +545,35 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  Widget _buildControlButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onPressed,
-    required Color color,
-    double size = 60,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onPressed,
-            borderRadius: BorderRadius.circular(size / 2),
-            child: Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: color == Colors.red
-                    ? Colors.red
-                    : Colors.white.withOpacity(0.2),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                icon,
+  Widget _buildAudioView() {
+    return Container(
+      color: Colors.grey[900],
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: 60,
+              backgroundColor: Colors.grey[700],
+              child: const Icon(Icons.person, size: 60, color: Colors.white),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              widget.receiverName ?? 'Unknown',
+              style: const TextStyle(
                 color: Colors.white,
-                size: size * 0.5,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
               ),
             ),
-          ),
+            const SizedBox(height: 10),
+            Text(
+              _isConnected ? _callDurationDisplay : 'Connecting...',
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

@@ -1,7 +1,12 @@
+// users_list_screen.dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:async';
+import 'dart:math';
+import '../service/socket_service.dart';
+import 'video_call_screen.dart';
 
 class UsersListScreen extends StatefulWidget {
   const UsersListScreen({super.key});
@@ -10,196 +15,350 @@ class UsersListScreen extends StatefulWidget {
   State<UsersListScreen> createState() => _UsersListScreenState();
 }
 
-class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingObserver {
+class _UsersListScreenState extends State<UsersListScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  StreamSubscription<DocumentSnapshot>? _callSubscription;
+  final SocketService _socketService = SocketService();
 
   String? _currentUserName;
+  String _userStatus = 'ONLINE';
+  Map<String, dynamic>? _incomingCallData;
+
+  // Add missing socket event callbacks
+  Function(Map<String, dynamic>)? onCallInitiated;
+  Function(Map<String, dynamic>)? onCallBusy;
+  Function(Map<String, dynamic>)? onCallFailed;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _setUserOnline(true);
-    _loadCurrentUserName();
-    _listenForIncomingCalls();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _setUserOnline(false);
-    _callSubscription?.cancel();
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _setUserOnline(true);
-    } else {
-      _setUserOnline(false);
-    }
-  }
-
-  Future<void> _loadCurrentUserName() async {
-    final doc = await _firestore
-        .collection('users')
-        .doc(_auth.currentUser!.uid)
-        .get();
-
-    if (mounted && doc.exists) {
-      setState(() {
-        _currentUserName = doc.data()?['name'] ?? 'Unknown';
-      });
-    }
-  }
-
-  void _setUserOnline(bool isOnline) {
-    if (_auth.currentUser != null) {
-      _firestore.collection('users').doc(_auth.currentUser!.uid).update({
-        'isOnline': isOnline,
-        'lastSeen': FieldValue.serverTimestamp(),
-      }).catchError((e) => print('Error updating online status: $e'));
-    }
-  }
-
-  void _listenForIncomingCalls() {
-    final currentUserId = _auth.currentUser!.uid;
-
-    _callSubscription = _firestore
-        .collection('calls')
-        .doc(currentUserId)
-        .snapshots()
-        .listen((snapshot) {
-      if (snapshot.exists && mounted) {
-        final data = snapshot.data()!;
-        final status = data['status'] as String?;
-
-        if (status == 'ringing') {
-          _showIncomingCallDialog(
-            callId: snapshot.id,
-            callerName: data['callerName'] as String,
-            callerId: data['callerId'] as String,
-            callType: data['callType'] as String,
-            roomId: data['roomId'] as String,
-          );
-        }
-      }
+    _loadCurrentUser().then((_) {
+      _initializeSocket();
     });
   }
 
-  void _showIncomingCallDialog({
-    required String callId,
-    required String callerName,
-    required String callerId,
-    required String callType,
-    required String roomId,
-  }) {
-    final isVideo = callType == 'video';
+  void _initializeSocket() {
+    final user = _auth.currentUser;
+    if (user != null) {
+      _socketService.connect(
+        user.uid,
+        _currentUserName ?? user.displayName ?? 'User',
+        user.email ?? '',
+      );
+
+      // Setup socket listeners
+      _socketService.onCallIncoming = (data) {
+        _handleIncomingCall(data);
+      };
+
+      _socketService.onCallAccepted = (data) {
+        _handleCallAccepted(data);
+      };
+
+      _socketService.onCallRejected = (data) {
+        _showSnackBar('Call rejected: ${data['reason']}');
+        setState(() => _userStatus = 'ONLINE');
+      };
+
+      _socketService.onCallEnded = (data) {
+        print('📞 Call ended remotely');
+        setState(() => _userStatus = 'ONLINE');
+      };
+
+      _socketService.onCallInitiated = (data) {
+        print('✅ Call initiated successfully: $data');
+
+        final roomId = data['roomId'];
+        final receiverId = data['receiverId'];
+
+        if (roomId != null) {
+          // ✅ Now navigate to call screen with the server-provided room ID
+          _navigateToCallScreen(
+            roomId: roomId,
+            isVideo: true, // or use the actual value
+            isJoining: false,
+            receiverName: 'Connecting...', // We might not have this yet
+            callerId: receiverId,
+          );
+        } else {
+          print('❌ No room ID received from server');
+          setState(() => _userStatus = 'ONLINE');
+          _showSnackBar('Failed to start call: no room ID');
+        }
+      };
+
+      _socketService.onCallBusy = (data) {
+        print('⏳ User busy: ${data['reason']}');
+        setState(() => _userStatus = 'ONLINE');
+        _showSnackBar('User is busy: ${data['reason']}');
+      };
+
+      _socketService.onCallFailed = (data) {
+        print('❌ Call failed: ${data['reason']}');
+        setState(() => _userStatus = 'ONLINE');
+        _showSnackBar('Call failed: ${data['reason']}');
+      };
+
+      _socketService.onError = (error) {
+        _showSnackBar(error);
+      };
+
+      _socketService.onConnected = () {
+        print('✅ Socket connected successfully');
+      };
+    }
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final user = _auth.currentUser;
+    if (user != null) {
+      try {
+        final doc = await _firestore.collection('users').doc(user.uid).get();
+        if (mounted && doc.exists) {
+          setState(() {
+            _currentUserName = doc.data()?['name'] ?? user.displayName ?? 'User';
+          });
+        } else {
+          setState(() {
+            _currentUserName = user.displayName ?? 'User';
+          });
+        }
+      } catch (e) {
+        print('Error loading user: $e');
+        setState(() {
+          _currentUserName = user.displayName ?? 'User';
+        });
+      }
+    }
+  }
+
+  void _handleIncomingCall(Map<String, dynamic> data) {
+    if (!mounted) return;
+
+    setState(() {
+      _incomingCallData = data;
+      _userStatus = 'RINGING';
+    });
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => IncomingCallDialog(
-        callerName: callerName,
-        isVideo: isVideo,
-        onAccept: () async {
-          // Close dialog first
-          Navigator.of(dialogContext).pop();
-
-          // Update call status to accepted
-          await _firestore.collection('calls').doc(callId).update({
-            'status': 'accepted',
-            'acceptedAt': FieldValue.serverTimestamp(),
-          });
-
-          // Navigate to video call screen using the main context
-          if (mounted) {
-            Navigator.of(context).pushNamed(
-              '/video_call',
-              arguments: {
-                'roomId': roomId,
-                'isVideo': isVideo,
-                'isJoining': true,
-              },
-            );
-          }
+      builder: (context) => IncomingCallDialog(
+        callerName: data['callerName'] ?? 'Unknown',
+        isVideo: data['isVideoCall'] ?? false,
+        onAccept: () {
+          Navigator.of(context).pop();
+          _acceptCall(data);
         },
-        onReject: () async {
-          // Close dialog first
-          Navigator.of(dialogContext).pop();
-
-          // Update call status to rejected
-          await _firestore.collection('calls').doc(callId).update({
-            'status': 'rejected',
-            'rejectedAt': FieldValue.serverTimestamp(),
-          });
+        onReject: () {
+          Navigator.of(context).pop();
+          _rejectCall(data);
         },
       ),
     );
   }
 
-  Future<void> _initiateCall({
-    required String receiverId,
-    required String receiverName,
-    required String receiverEmail,
+  void _acceptCall(Map<String, dynamic> data) {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    _socketService.acceptCall(
+      callerId: data['callerId'],
+      receiverId: user.uid,
+      receiverName: _currentUserName ?? 'User',
+      roomId: data['roomId'],
+      isVideoCall: data['isVideoCall'] ?? false,
+    );
+
+    // Navigate to call screen as receiver (joining)
+    _navigateToCallScreen(
+      roomId: data['roomId'],
+      isVideo: data['isVideoCall'] ?? false,
+      isJoining: true,
+      receiverName: data['callerName'] ?? 'Unknown',
+      callerId: data['callerId'],
+    );
+
+    setState(() {
+      _userStatus = 'IN_CALL';
+      _incomingCallData = null;
+    });
+  }
+
+  void _rejectCall(Map<String, dynamic> data) {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    _socketService.rejectCall(
+      callerId: data['callerId'],
+      receiverId: user.uid,
+      roomId: data['roomId'],
+      isVideoCall: data['isVideoCall'] ?? false,
+    );
+
+    setState(() {
+      _userStatus = 'ONLINE';
+      _incomingCallData = null;
+    });
+  }
+
+  // void _initiateCall(String receiverId, String receiverName, bool isVideo) {
+  //   final user = _auth.currentUser;
+  //   if (user == null) return;
+  //
+  //   if (_userStatus != 'ONLINE') {
+  //     _showSnackBar('You are already in a call');
+  //     return;
+  //   }
+  //
+  //   setState(() => _userStatus = 'RINGING');
+  //
+  //   // Generate room ID
+  //   final roomId = 'room_${DateTime.now().millisecondsSinceEpoch}_${_generateRandomString()}';
+  //
+  //   print('📞 Calling $receiverName (${isVideo ? 'video' : 'audio'}) in room: $roomId');
+  //
+  //   // Navigate to call screen immediately as caller (creating)
+  //   _navigateToCallScreen(
+  //     roomId: roomId,
+  //     isVideo: isVideo,
+  //     isJoining: false,
+  //     receiverName: receiverName,
+  //     callerId: receiverId,
+  //   );
+  //
+  //   // Initiate call through socket
+  //   _socketService.initiateCall(
+  //     callerId: user.uid,
+  //     callerName: _currentUserName ?? 'User',
+  //     receiverId: receiverId,
+  //     receiverName: receiverName,
+  //     isVideoCall: isVideo,
+  //   );
+  //
+  //   // Set timeout for call initiation
+  //   _setCallInitiationTimeout();
+  // }
+
+  void _initiateCall(String receiverId, String receiverName, bool isVideo) {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    // if (_userStatus != 'ONLINE') {
+    //   _showSnackBar('You are already in a call');
+    //   return;
+    // }
+
+    setState(() => _userStatus = 'RINGING');
+
+    // ✅ FIX: Remove local room ID generation - let the server handle it
+    // The server will generate the room ID and send it back in call:initiated
+
+    print('📞 Calling $receiverName (${isVideo ? 'video' : 'audio'})');
+
+    // ✅ FIX: Don't navigate immediately - wait for server confirmation
+    // Initiate call through socket first
+    _socketService.initiateCall(
+      callerId: user.uid,
+      callerName: _currentUserName ?? 'User',
+      receiverId: receiverId,
+      receiverName: receiverName,
+      isVideoCall: isVideo,
+    );
+
+    // Set timeout for call initiation
+    _setCallInitiationTimeout();
+  }
+
+  void _handleCallInitiated(Map<String, dynamic> data, String userId) {
+    // This is called when the server confirms call initiation
+    print('✅ Server confirmed call initiation: $data');
+
+    // We don't need to navigate here since we already navigated in _initiateCall
+    // This is just for confirmation
+  }
+
+  void _handleCallAccepted(Map<String, dynamic> data) {
+    if (!mounted) return;
+
+    print('✅ Call accepted by remote user: $data');
+
+    // We're already in the call screen, just update status
+    setState(() => _userStatus = 'IN_CALL');
+  }
+
+  void _navigateToCallScreen({
+    required String roomId,
     required bool isVideo,
-  }) async {
-    try {
-      final currentUserId = _auth.currentUser!.uid;
+    required bool isJoining,
+    required String receiverName,
+    required String callerId,
+  }) {
 
-      // Create a room first
-      final roomRef = _firestore.collection('rooms').doc();
-      final roomId = roomRef.id;
+    print('🎯 Navigating to call screen:');
+    print('   Room: $roomId');
+    print('   Video: $isVideo');
+    print('   Joining: $isJoining');
+    print('   Receiver: $receiverName');
+    print('   Caller ID: $callerId');
 
-      await roomRef.set({
-        'callerId': currentUserId,
-        'callerName': _currentUserName ?? 'Unknown',
-        'receiverId': receiverId,
-        'receiverName': receiverName,
-        'callType': isVideo ? 'video' : 'audio',
-        'status': 'waiting',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
 
-      // Create call notification for receiver
-      await _firestore.collection('calls').doc(receiverId).set({
-        'callerId': currentUserId,
-        'callerName': _currentUserName ?? 'Unknown',
-        'callType': isVideo ? 'video' : 'audio',
-        'roomId': roomId,
-        'status': 'ringing',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // Navigate to video call screen
-      if (!mounted) return;
-
-      await Navigator.of(context).pushNamed(
-        '/video_call',
-        arguments: {
-          'roomId': roomId,
-          'isVideo': isVideo,
-          'isJoining': false,
-          'receiverId': receiverId,
-          'receiverName': receiverName,
-        },
-      );
-    } catch (e) {
-      print('Error initiating call: $e');
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoCallScreen(
+          roomId: roomId,
+          isVideo: isVideo,
+          isJoining: isJoining,
+          socketService: _socketService,
+          callerId: callerId,
+          receiverName: receiverName,
+        ),
+      ),
+    ).then((_) {
+      // When returning from call screen, reset status
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to initiate call: $e')),
-        );
+        setState(() => _userStatus = 'ONLINE');
       }
+    });
+  }
+
+  void _setCallInitiationTimeout() {
+    Future.delayed(const Duration(seconds: 250), () {
+      if (_userStatus == 'RINGING' && mounted) {
+        setState(() => _userStatus = 'ONLINE');
+        _showSnackBar('Call initiation timeout - no response from user');
+      }
+    });
+  }
+
+  String _generateRandomString({int length = 6}) {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final random = Random();
+    return String.fromCharCodes(Iterable.generate(
+        length, (_) => chars.codeUnitAt(random.nextInt(chars.length))));
+  }
+
+  void _showSnackBar(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
   }
 
-  Future<void> _logout() async {
-    _setUserOnline(false);
+  void _logout() async {
+    _socketService.disconnect();
     await _auth.signOut();
+  }
+
+  @override
+  void dispose() {
+    _socketService.disconnect();
+    super.dispose();
   }
 
   @override
@@ -208,21 +367,40 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Video Call App'),
-        backgroundColor: Colors.blue,
+        title: Text('Video Call App - ${_userStatus}'),
+        backgroundColor: _getStatusColor(),
         foregroundColor: Colors.white,
         actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
+            child: Row(
+              children: [
+                Icon(
+                  _socketService.isConnected ? Icons.wifi : Icons.wifi_off,
+                  color: _socketService.isConnected ? Colors.green : Colors.red,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _socketService.isConnected ? 'Connected' : 'Disconnected',
+                  style: TextStyle(
+                    color: _socketService.isConnected ? Colors.green : Colors.red,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _logout,
+            tooltip: 'Logout',
           ),
         ],
       ),
       body: Column(
         children: [
-          // Current User Info
+          // User info header
           Container(
-            width: double.infinity,
             padding: const EdgeInsets.all(16),
             color: Colors.blue.shade50,
             child: Row(
@@ -231,39 +409,55 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                   radius: 25,
                   backgroundColor: Colors.blue,
                   child: Text(
-                    _currentUserName?.substring(0, 1).toUpperCase() ?? 'U',
+                    _currentUserName!.toUpperCase() ?? 'U',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 24,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
                 const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _currentUserName ?? 'Loading...',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _currentUserName ?? 'Loading...',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    Text(
-                      _auth.currentUser?.email ?? '',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.shade600,
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: _getStatusDotColor(),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _userStatus,
+                            style: TextStyle(
+                              color: _getStatusTextColor(),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
 
-          // Users List
+          // Users list
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: _firestore
@@ -272,16 +466,30 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
                 }
 
                 if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
+                  return Center(
+                    child: Text('Error: ${snapshot.error}'),
+                  );
                 }
 
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return const Center(
-                    child: Text('No other users available'),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.people_outline, size: 64, color: Colors.grey),
+                        SizedBox(height: 16),
+                        Text(
+                          'No other users online',
+                          style: TextStyle(fontSize: 16, color: Colors.grey),
+                        ),
+                      ],
+                    ),
                   );
                 }
 
@@ -291,45 +499,54 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                   itemCount: users.length,
                   itemBuilder: (context, index) {
                     final userData = users[index].data() as Map<String, dynamic>;
-                    final userName = userData['name'] as String? ?? 'Unknown';
-                    final userEmail = userData['email'] as String? ?? '';
-                    final isOnline = userData['isOnline'] as bool? ?? false;
-                    final userId = userData['uid'] as String;
+                    final userName = userData['name'] ?? 'Unknown User';
+                    final userEmail = userData['email'] ?? '';
+                    final userId = userData['uid'];
+                    final isOnline = userData['isOnline'] ?? false;
+                    final status = userData['status'] ?? 'OFFLINE';
+                    final isInCall = status == 'IN_CALL' || status == 'RINGING';
 
                     return Card(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
+                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      elevation: 2,
                       child: ListTile(
                         leading: Stack(
                           children: [
                             CircleAvatar(
-                              radius: 25,
-                              backgroundColor: Colors.blue.shade300,
+                              backgroundColor: Colors.blue.shade100,
                               child: Text(
-                                userName.substring(0, 1).toUpperCase(),
+                                userName!.toUpperCase(),
                                 style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
+                                  color: Colors.blue,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
-                            if (isOnline)
+                            if (isOnline && !isInCall)
                               Positioned(
                                 right: 0,
                                 bottom: 0,
                                 child: Container(
-                                  width: 14,
-                                  height: 14,
+                                  width: 12,
+                                  height: 12,
                                   decoration: BoxDecoration(
                                     color: Colors.green,
                                     shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
-                                    ),
+                                    border: Border.all(color: Colors.white, width: 2),
+                                  ),
+                                ),
+                              ),
+                            if (isInCall)
+                              Positioned(
+                                right: 0,
+                                bottom: 0,
+                                child: Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
                                   ),
                                 ),
                               ),
@@ -337,47 +554,48 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                         ),
                         title: Text(
                           userName,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w600,
-                            fontSize: 16,
+                            color: isOnline ? Colors.black : Colors.grey,
                           ),
                         ),
-                        subtitle: Text(
-                          userEmail,
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 14,
-                          ),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              userEmail,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              isInCall ? 'In Call' : (isOnline ? 'Online' : 'Offline'),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isInCall ? Colors.red : (isOnline ? Colors.green : Colors.grey),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
                         ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Audio Call Button
                             IconButton(
-                              icon: const Icon(Icons.call),
-                              color: Colors.green,
-                              iconSize: 28,
-                              onPressed: () => _initiateCall(
-                                receiverId: userId,
-                                receiverName: userName,
-                                receiverEmail: userEmail,
-                                isVideo: false,
-                              ),
+                              icon: const Icon(Icons.call, color: Colors.green),
                               tooltip: 'Audio Call',
+                              onPressed: (){
+                                _initiateCall(userId, userName, false);
+                              },
                             ),
-                            const SizedBox(width: 8),
-                            // Video Call Button
                             IconButton(
-                              icon: const Icon(Icons.videocam),
-                              color: Colors.blue,
-                              iconSize: 28,
-                              onPressed: () => _initiateCall(
-                                receiverId: userId,
-                                receiverName: userName,
-                                receiverEmail: userEmail,
-                                isVideo: true,
-                              ),
+                              icon: const Icon(Icons.videocam, color: Colors.blue),
                               tooltip: 'Video Call',
+                              onPressed: (){
+                                _initiateCall(userId, userName, true);
+                              },
                             ),
                           ],
                         ),
@@ -392,9 +610,45 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
       ),
     );
   }
+
+  Color _getStatusColor() {
+    switch (_userStatus) {
+      case 'IN_CALL':
+        return Colors.red;
+      case 'RINGING':
+        return Colors.orange;
+      default:
+        return Colors.blue;
+    }
+  }
+
+  Color _getStatusDotColor() {
+    switch (_userStatus) {
+      case 'IN_CALL':
+        return Colors.red;
+      case 'RINGING':
+        return Colors.orange;
+      case 'ONLINE':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Color _getStatusTextColor() {
+    switch (_userStatus) {
+      case 'IN_CALL':
+        return Colors.red;
+      case 'RINGING':
+        return Colors.orange;
+      case 'ONLINE':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
 }
 
-// Incoming Call Dialog Widget
 class IncomingCallDialog extends StatefulWidget {
   final String callerName;
   final bool isVideo;
@@ -443,8 +697,11 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Text(
+        'Incoming ${widget.isVideo ? 'Video' : 'Audio'} Call',
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontWeight: FontWeight.bold),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -456,50 +713,47 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> {
           ),
           const SizedBox(height: 20),
           Text(
-            'Incoming ${widget.isVideo ? 'Video' : 'Audio'} Call',
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
             widget.callerName,
-            style: const TextStyle(
-              fontSize: 18,
-              color: Colors.grey,
-            ),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 10),
           Text(
             'Ringing... $_secondsRemaining s',
-            style: const TextStyle(
-              fontSize: 14,
-              color: Colors.orange,
-            ),
-          ),
-          const SizedBox(height: 30),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              // Reject Button
-              FloatingActionButton(
-                onPressed: widget.onReject,
-                backgroundColor: Colors.red,
-                heroTag: 'reject',
-                child: const Icon(Icons.call_end, color: Colors.white),
-              ),
-              // Accept Button
-              FloatingActionButton(
-                onPressed: widget.onAccept,
-                backgroundColor: Colors.green,
-                heroTag: 'accept',
-                child: const Icon(Icons.call, color: Colors.white),
-              ),
-            ],
+            style: const TextStyle(color: Colors.orange),
           ),
         ],
       ),
+      actions: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.call_end, color: Colors.white),
+                label: const Text('Reject', style: TextStyle(color: Colors.white)),
+                onPressed: widget.onReject,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.call, color: Colors.white),
+                label: const Text('Accept', style: TextStyle(color: Colors.white)),
+                onPressed: widget.onAccept,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

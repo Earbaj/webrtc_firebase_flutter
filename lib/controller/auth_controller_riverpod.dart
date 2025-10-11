@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../repository/auth_repository.dart';
+import '../screen/user_list_screen.dart';
+import '../service/socket_service.dart';
 
 // =============================================
 // PROVIDERS - Dependency Injection & State Management
@@ -21,6 +23,11 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 final authStateChangesProvider = StreamProvider<User?>((ref) {
   // Get the AuthRepository instance and return its authStateChanges stream
   return ref.watch(authRepositoryProvider).authStateChanges;
+});
+
+
+final socketServiceProvider = Provider<SocketService>((ref) {
+  return SocketService();
 });
 
 /// [StateNotifierProvider] for auth operations with loading/error states

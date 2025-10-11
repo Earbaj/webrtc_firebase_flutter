@@ -21,26 +21,34 @@ void main() async {
   runApp(ProviderScope(child: const MyApp()));
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends ConsumerWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
       title: 'Flutter WebRTC Demo',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const AuthWrapper(),
+      home: const NewAuthWrapper(),
       routes: {
         '/video_call': (context) {
           final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
-          return VideoCallScreen(
-            roomId: args['roomId'],
-            isVideo: args['isVideo'],
-            isJoining: args['isJoining'],
-            receiverId: args['receiverId'],
-            receiverName: args['receiverName'],
+
+          // Use Consumer to get socket service
+          return Consumer(
+            builder: (context, ref, child) {
+              final socketService = ref.read(socketServiceProvider);
+              return VideoCallScreen(
+                roomId: args['roomId'],
+                isVideo: args['isVideo'],
+                isJoining: args['isJoining'],
+                receiverName: args['receiverName'],
+                socketService: socketService,
+                callerId: args['callerId'], // Add this
+              );
+            },
           );
         },
       },
@@ -82,6 +90,7 @@ class AuthWrapper extends StatelessWidget {
 class RiverPodAuthWrapper extends ConsumerWidget {
   const RiverPodAuthWrapper({super.key});
 
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateChangesProvider);
@@ -95,6 +104,75 @@ class RiverPodAuthWrapper extends ConsumerWidget {
       ),
       data: (user) {
         return user == null ? const AuthScreen() : const UsersListScreen();
+      },
+    );
+  }
+}
+
+// auth_wrapper.dart or similar
+
+class NewAuthWrapper extends ConsumerStatefulWidget {
+  const NewAuthWrapper({super.key});
+
+  @override
+  ConsumerState<NewAuthWrapper> createState() => _NewAuthWrapperState();
+}
+
+class _NewAuthWrapperState extends ConsumerState<NewAuthWrapper> {
+  bool _socketInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeSocket();
+  }
+
+  void _initializeSocket() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final socketService = ref.read(socketServiceProvider);
+
+      // Get user data from Firestore first
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get()
+          .then((doc) {
+        if (doc.exists) {
+          final userName = doc.data()?['name'] ?? user.displayName ?? 'User';
+          final userEmail = doc.data()?['email'] ?? user.email ?? '';
+
+          socketService.connect(user.uid, userName, userEmail);
+          setState(() => _socketInitialized = true);
+        }
+      });
+    } else {
+      setState(() => _socketInitialized = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_socketInitialized) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.hasData) {
+          return const UsersListScreen();
+        }
+
+        return const AuthScreen();
       },
     );
   }
