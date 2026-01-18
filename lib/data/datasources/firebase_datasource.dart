@@ -10,7 +10,7 @@ import '../models/user_model.dart';
 
 class FirebaseDataSource {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseFirestore firestore = FirebaseFirestore.instance;
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
@@ -33,7 +33,7 @@ class FirebaseDataSource {
       }
 
       // Update user online status
-      await _updateUserStatus(
+      await updateUserStatus(
         userId: user.uid,
         status: AppConstants.userStatusOnline,
         isOnline: true,
@@ -76,7 +76,7 @@ class FirebaseDataSource {
         isOnline: true,
       );
 
-      await _firestore
+      await firestore
           .collection(AppConstants.usersCollection)
           .doc(user.uid)
           .set(userModel.toFirestore());
@@ -112,7 +112,7 @@ class FirebaseDataSource {
       }
 
       // Check if user exists in Firestore
-      final userDoc = await _firestore
+      final userDoc = await firestore
           .collection(AppConstants.usersCollection)
           .doc(user.uid)
           .get();
@@ -130,7 +130,7 @@ class FirebaseDataSource {
           isOnline: true,
         );
 
-        await _firestore
+        await firestore
             .collection(AppConstants.usersCollection)
             .doc(user.uid)
             .set(userModel.toFirestore());
@@ -138,7 +138,7 @@ class FirebaseDataSource {
         return right(userModel);
       } else {
         // Update existing user status
-        await _updateUserStatus(
+        await updateUserStatus(
           userId: user.uid,
           status: AppConstants.userStatusOnline,
           isOnline: true,
@@ -159,7 +159,7 @@ class FirebaseDataSource {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser != null) {
-        await _updateUserStatus(
+        await updateUserStatus(
           userId: currentUser.uid,
           status: AppConstants.userStatusOffline,
           isOnline: false,
@@ -191,7 +191,7 @@ class FirebaseDataSource {
   // User management
   Future<Either<String, UserModel>> getUser(String userId) async {
     try {
-      final doc = await _firestore
+      final doc = await firestore
           .collection(AppConstants.usersCollection)
           .doc(userId)
           .get();
@@ -210,7 +210,7 @@ class FirebaseDataSource {
 
   Future<Either<String, List<UserModel>>> getAllUsers() async {
     try {
-      final querySnapshot = await _firestore
+      final querySnapshot = await firestore
           .collection(AppConstants.usersCollection)
           .get();
 
@@ -226,13 +226,13 @@ class FirebaseDataSource {
   }
 
   // Presence system
-  Future<Either<String, void>> _updateUserStatus({
+  Future<Either<String, void>> updateUserStatus({
     required String userId,
     required String status,
     required bool isOnline,
   }) async {
     try {
-      await _firestore
+      await firestore
           .collection(AppConstants.usersCollection)
           .doc(userId)
           .update({
@@ -249,7 +249,7 @@ class FirebaseDataSource {
   }
 
   Future<Either<String, void>> setUserOnline(String userId) async {
-    return await _updateUserStatus(
+    return await updateUserStatus(
       userId: userId,
       status: AppConstants.userStatusOnline,
       isOnline: true,
@@ -257,7 +257,7 @@ class FirebaseDataSource {
   }
 
   Future<Either<String, void>> setUserOffline(String userId) async {
-    return await _updateUserStatus(
+    return await updateUserStatus(
       userId: userId,
       status: AppConstants.userStatusOffline,
       isOnline: false,
@@ -265,7 +265,7 @@ class FirebaseDataSource {
   }
 
   Future<Either<String, void>> setUserBusy(String userId, bool isBusy) async {
-    return await _updateUserStatus(
+    return await updateUserStatus(
       userId: userId,
       status: isBusy
           ? AppConstants.userStatusBusy
@@ -282,7 +282,7 @@ class FirebaseDataSource {
         return left('No user logged in');
       }
 
-      await _firestore
+      await firestore
           .collection(AppConstants.usersCollection)
           .doc(currentUser.uid)
           .update({
@@ -315,7 +315,7 @@ class FirebaseDataSource {
   }
 
   Stream<UserModel> userStream(String userId) {
-    return _firestore
+    return firestore
         .collection(AppConstants.usersCollection)
         .doc(userId)
         .snapshots()
@@ -328,7 +328,7 @@ class FirebaseDataSource {
   }
 
   Stream<List<UserModel>> onlineUsersStream() {
-    return _firestore
+    return firestore
         .collection(AppConstants.usersCollection)
         .where('isOnline', isEqualTo: true)
         .snapshots()
