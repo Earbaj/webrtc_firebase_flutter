@@ -6,6 +6,7 @@ import 'package:webrtc_flutter/presentation/views/auth/register_screen.dart';
 
 import '../providers/auth_provider.dart';
 import '../views/auth/login_screen.dart';
+import '../views/home/home_screen.dart';
 import 'go_router_notifier.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -25,6 +26,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: RouteNames.register,
         builder: (context, state) => const RegisterScreen(),
+      ),
+
+      // Main app routes
+      GoRoute(
+        path: RouteNames.home,
+        builder: (context, state) => const HomeScreen(),
       ),
       // Add other routes here as we create screens
     ],
