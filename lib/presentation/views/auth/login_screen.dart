@@ -8,6 +8,8 @@ import '../../../core/utils/logger.dart';
 import '../../providers/auth_provider.dart';
 import '../../router/route_names.dart';
 import '../../viewmodels/auth_viewmodel.dart';
+import '../../widgets/common/app_button.dart';
+import '../../widgets/common/app_textfield.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -207,7 +209,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
                     // Login Button
                     if (_isLoading || authState.isLoading)
-                      const LoadingIndicator()
+                      const CircularProgressIndicator()
                     else
                       AppButton(
                         onPressed: _signInWithEmail,

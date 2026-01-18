@@ -8,6 +8,8 @@ import '../../../core/utils/logger.dart';
 import '../../providers/auth_provider.dart';
 import '../../router/route_names.dart';
 import '../../viewmodels/auth_viewmodel.dart';
+import '../../widgets/common/app_button.dart';
+import '../../widgets/common/app_textfield.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
@@ -214,7 +216,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
 
                 // Register Button
                 if (_isLoading || authState.isLoading)
-                  const LoadingIndicator()
+                  const CircularProgressIndicator()
                 else
                   AppButton(
                     onPressed: _signUp,
