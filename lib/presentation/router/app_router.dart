@@ -1,4 +1,5 @@
 
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:webrtc_flutter/presentation/router/route_names.dart';
@@ -6,7 +7,11 @@ import 'package:webrtc_flutter/presentation/views/auth/register_screen.dart';
 
 import '../providers/auth_provider.dart';
 import '../views/auth/login_screen.dart';
+import '../views/home/calls_screen.dart';
+import '../views/home/contacts_screen.dart';
 import '../views/home/home_screen.dart';
+import '../views/home/profile_screen.dart';
+import '../views/settings/settings_screen.dart';
 import 'go_router_notifier.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -32,6 +37,45 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: RouteNames.home,
         builder: (context, state) => const HomeScreen(),
+      ),
+      GoRoute(
+        path: RouteNames.contacts,
+        builder: (context, state) => const ContactsScreen(),
+      ),
+      GoRoute(
+        path: RouteNames.calls,
+        builder: (context, state) => const CallsScreen(),
+      ),
+      GoRoute(
+        path: RouteNames.profile,
+        builder: (context, state) => const ProfileScreen(),
+      ),
+      GoRoute(
+        path: RouteNames.settings,
+        builder: (context, state) => const SettingsScreen(),
+      ),
+
+      // Call routes (to be implemented in Phase 4)
+      GoRoute(
+        path: RouteNames.incomingCall,
+        builder: (context, state) {
+          // TODO: Implement incoming call screen
+          return const SizedBox();
+        },
+      ),
+      GoRoute(
+        path: RouteNames.videoCall,
+        builder: (context, state) {
+          // TODO: Implement video call screen
+          return const SizedBox();
+        },
+      ),
+      GoRoute(
+        path: RouteNames.audioCall,
+        builder: (context, state) {
+          // TODO: Implement audio call screen
+          return const SizedBox();
+        },
       ),
       // Add other routes here as we create screens
     ],
