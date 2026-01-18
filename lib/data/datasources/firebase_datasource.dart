@@ -6,6 +6,10 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/logger.dart';
+import '../../domain/entities/call_entity.dart';
+import '../../domain/entities/signaling_entity.dart';
+import '../models/call_model.dart';
+import '../models/notification_model.dart';
 import '../models/user_model.dart';
 
 class FirebaseDataSource {
@@ -376,5 +380,262 @@ class FirebaseDataSource {
       lastSeen: DateTime.now(),
       isOnline: false,
     );
+  }
+
+  // Call Management Methods
+  Future<Either<String, CallModel>> createCall({
+    required String callerId,
+    required String receiverId,
+    required String callType,
+  }) async {
+    try {
+      final callId = _generateCallId();
+      final callModel = CallModel(
+        id: callId,
+        callId: callId,
+        callerId: callerId,
+        receiverId: receiverId,
+        callType: callType,
+        status: AppConstants.callStatusInitiated,
+        startedAt: DateTime.now(),
+        isIncoming: false,
+      );
+
+      await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(callId)
+          .set(callModel.toFirestore());
+
+      // Create subcollection for signaling
+      await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(callId)
+          .collection('signaling')
+          .doc('init')
+          .set({
+        'callId': callId,
+        'callerId': callerId,
+        'receiverId': receiverId,
+        'callType': callType,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      // Set caller as busy
+      await setUserBusy(callerId, true);
+
+      return right(callModel);
+    } catch (e) {
+      AppLogger.error('Create call failed', error: e);
+      return left('Failed to create call');
+    }
+  }
+
+  Future<Either<String, CallModel>> getCall(String callId) async {
+    try {
+      final doc = await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(callId)
+          .get();
+
+      if (!doc.exists) {
+        return left('Call not found');
+      }
+
+      final call = CallModel.fromFirestore(doc);
+      return right(call);
+    } catch (e) {
+      AppLogger.error('Get call failed', error: e);
+      return left('Failed to get call');
+    }
+  }
+
+  Future<Either<String, void>> updateCall(CallModel call) async {
+    try {
+      await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(call.id)
+          .update(call.toFirestore());
+      return right(null);
+    } catch (e) {
+      AppLogger.error('Update call failed', error: e);
+      return left('Failed to update call');
+    }
+  }
+
+// Signaling Methods
+  Future<Either<String, void>> sendOffer({
+    required String callId,
+    required String fromUserId,
+    required String toUserId,
+    required Map<String, dynamic> offer,
+  }) async {
+    try {
+      await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(callId)
+          .collection('signaling')
+          .add({
+        'type': 'offer',
+        'sdp': offer,
+        'fromUserId': fromUserId,
+        'toUserId': toUserId,
+        'callId': callId,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+      return right(null);
+    } catch (e) {
+      AppLogger.error('Send offer failed', error: e);
+      return left('Failed to send offer');
+    }
+  }
+
+  Future<Either<String, void>> sendAnswer({
+    required String callId,
+    required String fromUserId,
+    required String toUserId,
+    required Map<String, dynamic> answer,
+  }) async {
+    try {
+      await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(callId)
+          .collection('signaling')
+          .add({
+        'type': 'answer',
+        'sdp': answer,
+        'fromUserId': fromUserId,
+        'toUserId': toUserId,
+        'callId': callId,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+      return right(null);
+    } catch (e) {
+      AppLogger.error('Send answer failed', error: e);
+      return left('Failed to send answer');
+    }
+  }
+
+  Future<Either<String, void>> sendIceCandidate({
+    required String callId,
+    required String fromUserId,
+    required String toUserId,
+    required Map<String, dynamic> candidate,
+  }) async {
+    try {
+      await firestore
+          .collection(AppConstants.callsCollection)
+          .doc(callId)
+          .collection('signaling')
+          .add({
+        'type': 'candidate',
+        'candidate': candidate,
+        'fromUserId': fromUserId,
+        'toUserId': toUserId,
+        'callId': callId,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+      return right(null);
+    } catch (e) {
+      AppLogger.error('Send ICE candidate failed', error: e);
+      return left('Failed to send ICE candidate');
+    }
+  }
+
+// Streams for Signaling
+  Stream<SignalingEntity> listenForOffers(String userId) {
+    return firestore
+        .collectionGroup('signaling')
+        .where('type', isEqualTo: 'offer')
+        .where('toUserId', isEqualTo: userId)
+        .snapshots()
+        .asyncExpand((snapshot) async* {
+      for (final change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final data = change.doc.data()!;
+          yield SignalingEntity.fromMap({
+            ...data,
+            'id': change.doc.id,
+            'timestamp': (data['timestamp'] as Timestamp).toDate(),
+          });
+        }
+      }
+    });
+  }
+
+  Stream<CallEntity> listenForCallUpdates(String callId) {
+    return firestore
+        .collection(AppConstants.callsCollection)
+        .doc(callId)
+        .snapshots()
+        .map((snapshot) {
+      if (!snapshot.exists) {
+        throw Exception('Call not found');
+      }
+      return CallModel.fromFirestore(snapshot).toEntity();
+    });
+  }
+
+// Notification Methods
+  Future<Either<String, void>> sendNotification({
+    required String userId,
+    required String type,
+    required String title,
+    required String body,
+    required Map<String, dynamic> data,
+  }) async {
+    try {
+      await firestore
+          .collection(AppConstants.notificationsCollection)
+          .add({
+        'userId': userId,
+        'type': type,
+        'title': title,
+        'body': body,
+        'data': data,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      return right(null);
+    } catch (e) {
+      AppLogger.error('Send notification failed', error: e);
+      return left('Failed to send notification');
+    }
+  }
+
+  Stream<List<NotificationModel>> notificationsStream(String userId) {
+    return firestore
+        .collection(AppConstants.notificationsCollection)
+        .where('userId', isEqualTo: userId)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+        .map((doc) => NotificationModel.fromFirestore(doc))
+        .toList());
+  }
+
+// Helper Methods
+  String _generateCallId() {
+    return DateTime.now().millisecondsSinceEpoch.toString() +
+        _auth.currentUser!.uid.substring(0, 8) ?? '';
+  }
+
+  Future<Either<String, bool>> isUserBusy(String userId) async {
+    try {
+      final doc = await firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .get();
+
+      if (!doc.exists) {
+        return left('User not found');
+      }
+
+      final data = doc.data()!;
+      final isBusy = data['status'] == AppConstants.userStatusBusy;
+      return right(isBusy);
+    } catch (e) {
+      AppLogger.error('Check user busy failed', error: e);
+      return left('Failed to check user status');
+    }
   }
 }
