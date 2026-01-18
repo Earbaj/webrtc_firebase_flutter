@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/themes/colors.dart';
 import '../../../core/themes/text_styles.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../router/route_names.dart';
 import '../../viewmodels/auth_viewmodel.dart';
 
 class ProfileScreen extends ConsumerWidget {
@@ -21,20 +23,20 @@ class ProfileScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Profile',
-          style: TextStyles.h2,
-        ),
-        actions: [
-          IconButton(
-            onPressed: () {
-              // TODO: Implement profile edit
-            },
-            icon: const Icon(Icons.edit),
-          ),
-        ],
-      ),
+      // appBar: AppBar(
+      //   title: Text(
+      //     'Profile',
+      //     style: TextStyles.h2,
+      //   ),
+      //   actions: [
+      //     IconButton(
+      //       onPressed: () {
+      //         // TODO: Implement profile edit
+      //       },
+      //       icon: const Icon(Icons.edit),
+      //     ),
+      //   ],
+      // ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -182,7 +184,7 @@ class ProfileScreen extends ConsumerWidget {
                     icon: Icons.settings,
                     title: 'Settings',
                     onTap: () {
-                      // TODO: Navigate to settings
+                      context.push(RouteNames.settings);
                     },
                   ),
 
