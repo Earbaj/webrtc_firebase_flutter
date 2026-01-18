@@ -100,20 +100,20 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Call History',
-          style: TextStyles.h2,
-        ),
-        actions: [
-          IconButton(
-            onPressed: () {
-              // TODO: Implement call history filter
-            },
-            icon: const Icon(Icons.filter_list),
-          ),
-        ],
-      ),
+      // appBar: AppBar(
+      //   title: Text(
+      //     'Call History',
+      //     style: TextStyles.h2,
+      //   ),
+      //   actions: [
+      //     IconButton(
+      //       onPressed: () {
+      //         // TODO: Implement call history filter
+      //       },
+      //       icon: const Icon(Icons.filter_list),
+      //     ),
+      //   ],
+      // ),
       body: _callLogs.isEmpty
           ? Center(
         child: Column(

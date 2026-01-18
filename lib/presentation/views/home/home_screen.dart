@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,6 +16,8 @@ import '../../router/route_names.dart';
 import '../../viewmodels/auth_viewmodel.dart';
 import '../../viewmodels/home_viewmodel.dart';
 import '../../widgets/user/user_list_tile.dart';
+import 'calls_screen.dart';
+import 'contacts_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -23,28 +27,53 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  final _searchController = TextEditingController();
-  String _searchQuery = '';
   int _currentIndex = 0;
+  StreamSubscription? _incomingCallSubscription;
+
+  // Store instances of screens to prevent recreation
+  late final List<Widget> _screens;
 
   @override
   void initState() {
     super.initState();
+
+    // Create screen instances once and reuse them
+    _screens = [
+      const ContactsScreen(key: Key('contacts_screen')),
+      const CallsScreen(key: Key('calls_screen')),
+      const ProfileScreen(key: Key('profile_screen')),
+    ];
+
     _setupCallListeners();
   }
 
   void _setupCallListeners() {
-    // Listen for incoming calls
     final callNotifier = ref.read(callNotifierProvider.notifier);
+
+    // Listen for incoming calls
     final incomingCallStream = callNotifier.listenForIncomingCalls();
 
-    // Handle incoming calls
-    // This will be implemented in Phase 4 with proper call handling
+    _incomingCallSubscription = incomingCallStream.listen((signaling) async {
+      if (signaling.isOffer && mounted) {
+        // Show incoming call screen
+        context.push(
+          RouteNames.incomingCall,
+          extra: {
+            'callId': signaling.callId,
+            'callType': signaling.type,
+            'callerId': signaling.fromUserId,
+            'callerName': 'Incoming Call', // Fetch from DB in real app
+            'callerEmail': 'caller@example.com',
+            'sdp': signaling.sdp,
+          },
+        );
+      }
+    });
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _incomingCallSubscription?.cancel();
     super.dispose();
   }
 
@@ -62,6 +91,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     result.fold(
           (error) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(error),
@@ -70,6 +100,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         );
       },
           (call) {
+        if (!mounted) return;
         // Navigate to call screen
         context.push(
           RouteNames.videoCall,
@@ -91,6 +122,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     result.fold(
           (error) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(error),
@@ -99,6 +131,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         );
       },
           (call) {
+        if (!mounted) return;
         // Navigate to call screen
         context.push(
           RouteNames.audioCall,
@@ -117,6 +150,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     result.fold(
           (error) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(error),
@@ -127,296 +161,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           (_) {
         // Sign out successful, router will handle navigation
       },
-    );
-  }
-
-  Widget _buildUserList() {
-    final homeViewModel = ref.read(homeViewModelProvider);
-    final usersStream = homeViewModel.searchUsers(_searchQuery);
-
-    return StreamBuilder<List<UserEntity>>(
-      stream: usersStream,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasError) {
-          return Center(
-            child: Text(
-              'Error loading users',
-              style: TextStyles.bodyMedium.copyWith(
-                color: AppColors.error,
-              ),
-            ),
-          );
-        }
-
-        final users = snapshot.data ?? [];
-        final currentUser = ref.read(currentUserProvider);
-        final filteredUsers = users.where((user) => user.id != currentUser?.id).toList();
-
-        if (filteredUsers.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.group_off_rounded,
-                  size: 80,
-                  color: AppColors.textSecondary,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _searchQuery.isEmpty
-                      ? 'No users found'
-                      : 'No users match your search',
-                  style: TextStyles.h3.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.only(bottom: 80),
-          itemCount: filteredUsers.length,
-          itemBuilder: (context, index) {
-            final user = filteredUsers[index];
-            return UserListTile(
-              user: user,
-              onTap: () => _onUserTap(user),
-              onVideoCall: () => _onVideoCall(user),
-              onAudioCall: () => _onAudioCall(user),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildCallsTab() {
-    // TODO: Implement calls history screen
-    return Center(
-      child: Text(
-        'Calls History',
-        style: TextStyles.h3,
-      ),
-    );
-  }
-
-  Widget _buildProfileTab() {
-    final currentUser = ref.watch(currentUserProvider);
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          // Profile Header
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              children: [
-                CircleAvatar(
-                  radius: 50,
-                  backgroundColor: AppColors.surfaceLight,
-                  child: currentUser?.profileImage != null
-                      ? ClipOval(
-                    child: Image.network(
-                      currentUser!.profileImage!,
-                      width: 96,
-                      height: 96,
-                      fit: BoxFit.cover,
-                    ),
-                  )
-                      : Icon(
-                    Icons.person,
-                    size: 50,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                Text(
-                  currentUser?.displayName ?? 'User',
-                  style: TextStyles.h2,
-                ),
-
-                const SizedBox(height: 8),
-
-                Text(
-                  currentUser?.email ?? '',
-                  style: TextStyles.bodyMedium.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // Status
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: currentUser?.isOnline ?? false
-                        ? AppColors.statusOnline.withOpacity(0.1)
-                        : AppColors.statusOffline.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: currentUser?.isOnline ?? false
-                              ? AppColors.statusOnline
-                              : AppColors.statusOffline,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        currentUser?.isOnline ?? false ? 'Online' : 'Offline',
-                        style: TextStyles.bodySmall.copyWith(
-                          color: currentUser?.isOnline ?? false
-                              ? AppColors.statusOnline
-                              : AppColors.statusOffline,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          // Settings Options
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              children: [
-                _buildSettingsOption(
-                  icon: Icons.settings,
-                  title: 'Settings',
-                  onTap: () => context.push(RouteNames.settings),
-                ),
-
-                _buildSettingsOption(
-                  icon: Icons.notifications,
-                  title: 'Notifications',
-                  badgeCount: ref.watch(unreadNotificationsCountProvider),
-                  onTap: () {
-                    // TODO: Implement notifications screen
-                  },
-                ),
-
-                _buildSettingsOption(
-                  icon: Icons.help,
-                  title: 'Help & Support',
-                  onTap: () {
-                    // TODO: Implement help screen
-                  },
-                ),
-
-                _buildSettingsOption(
-                  icon: Icons.logout,
-                  title: 'Sign Out',
-                  color: AppColors.error,
-                  onTap: _onSignOut,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSettingsOption({
-    required IconData icon,
-    required String title,
-    int badgeCount = 0,
-    Color? color,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: (color ?? AppColors.primary).withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  icon,
-                  color: color ?? AppColors.primary,
-                  size: 20,
-                ),
-              ),
-
-              const SizedBox(width: 16),
-
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyles.bodyLarge,
-                ),
-              ),
-
-              if (badgeCount > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    badgeCount.toString(),
-                    style: TextStyles.caption.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-
-              const SizedBox(width: 8),
-
-              Icon(
-                Icons.chevron_right,
-                color: AppColors.textSecondary,
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 
@@ -440,7 +184,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 },
                 icon: const Icon(Icons.notifications_outlined),
               ),
-
               if (unreadCount > 0)
                 Positioned(
                   right: 8,
@@ -470,56 +213,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
       body: IndexedStack(
         index: _currentIndex,
-        children: [
-          // Contacts Tab
-          Column(
-            children: [
-              // Search Bar
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: (value) {
-                    setState(() {
-                      _searchQuery = value;
-                    });
-                  },
-                  decoration: InputDecoration(
-                    hintText: 'Search users...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isNotEmpty
-                        ? IconButton(
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() {
-                          _searchQuery = '';
-                        });
-                      },
-                      icon: const Icon(Icons.clear),
-                    )
-                        : null,
-                    filled: true,
-                    fillColor: AppColors.surfaceLight,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                ),
-              ),
-
-              Expanded(
-                child: _buildUserList(),
-              ),
-            ],
-          ),
-
-          // Calls Tab
-          _buildCallsTab(),
-
-          // Profile Tab
-          ProfileScreen(),
-        ],
+        children: _screens,
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,

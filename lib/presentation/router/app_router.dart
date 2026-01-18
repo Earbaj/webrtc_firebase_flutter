@@ -7,6 +7,9 @@ import 'package:webrtc_flutter/presentation/views/auth/register_screen.dart';
 
 import '../providers/auth_provider.dart';
 import '../views/auth/login_screen.dart';
+import '../views/call/audio_call_screen.dart';
+import '../views/call/incoming_call_screen.dart';
+import '../views/call/video_call_screen.dart';
 import '../views/home/calls_screen.dart';
 import '../views/home/contacts_screen.dart';
 import '../views/home/home_screen.dart';
@@ -55,26 +58,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const SettingsScreen(),
       ),
 
-      // Call routes (to be implemented in Phase 4)
+      // Call routes
       GoRoute(
         path: RouteNames.incomingCall,
         builder: (context, state) {
-          // TODO: Implement incoming call screen
-          return const SizedBox();
+          final callData = state.extra as Map<String, dynamic>;
+          return IncomingCallScreen(callData: callData);
         },
       ),
       GoRoute(
         path: RouteNames.videoCall,
         builder: (context, state) {
-          // TODO: Implement video call screen
-          return const SizedBox();
+          return VideoCallScreen(extra: state.extra as Map<String, dynamic>?);
         },
       ),
       GoRoute(
         path: RouteNames.audioCall,
         builder: (context, state) {
-          // TODO: Implement audio call screen
-          return const SizedBox();
+          return AudioCallScreen(extra: state.extra as Map<String, dynamic>?);
         },
       ),
       // Add other routes here as we create screens

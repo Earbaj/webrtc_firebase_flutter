@@ -29,12 +29,12 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
     final onlineUsersStream = homeViewModel.getOnlineUsers();
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Contacts',
-          style: TextStyles.h2,
-        ),
-      ),
+      // appBar: AppBar(
+      //   title: Text(
+      //     'Contacts',
+      //     style: TextStyles.h2,
+      //   ),
+      // ),
       body: Column(
         children: [
           // Search Bar
