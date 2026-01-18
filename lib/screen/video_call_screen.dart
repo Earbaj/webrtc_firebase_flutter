@@ -76,6 +76,49 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       await _createRoom();
       _listenForCallStatus();
     }
+    _listenForRoomChanges();
+  }
+
+  void _listenForRoomChanges() {
+    _roomSubscription = _firestore
+        .collection('rooms')
+        .doc(widget.roomId)
+        .snapshots()
+        .listen((snapshot) async {
+      if (!snapshot.exists && mounted) {
+        print('🚪 Room deleted, ending call');
+        _endCall();
+        return;
+      }
+
+      if (mounted) {
+        final data = snapshot.data();
+        if (data != null) {
+          // For caller: listen for answer
+          if (!widget.isJoining && data.containsKey('answer')) {
+            final remoteDesc = await _peerConnection!.getRemoteDescription();
+            if (remoteDesc == null) {
+              final RTCSessionDescription answer = RTCSessionDescription(
+                data['answer']['sdp'],
+                data['answer']['type'],
+              );
+
+              await _peerConnection!.setRemoteDescription(answer);
+              print('✅ Remote description set');
+
+              if (mounted) {
+                setState(() => _isNegotiating = false);
+              }
+            }
+          }
+
+          // Also check for explicit ended status
+          if (data['status'] == 'ended') {
+            _endCall();
+          }
+        }
+      }
+    });
   }
 
   void _listenForCallStatus() {
@@ -272,32 +315,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
       print('✅ Offer created and saved');
 
-      // Listen for answer
-      _roomSubscription = _firestore
-          .collection('rooms')
-          .doc(widget.roomId)
-          .snapshots()
-          .listen((snapshot) async {
-        if (snapshot.exists && mounted) {
-          final data = snapshot.data()!;
-          if (data.containsKey('answer')) {
-            final remoteDesc = await _peerConnection!.getRemoteDescription();
-            if (remoteDesc == null) {
-              final RTCSessionDescription answer = RTCSessionDescription(
-                data['answer']['sdp'],
-                data['answer']['type'],
-              );
-
-              await _peerConnection!.setRemoteDescription(answer);
-              print('✅ Remote description set');
-
-              if (mounted) {
-                setState(() => _isNegotiating = false);
-              }
-            }
-          }
-        }
-      });
+      print('✅ Offer created and saved');
+    } catch (e) {
 
       // Listen for answer ICE candidates
       _answerCandidatesSubscription = _firestore

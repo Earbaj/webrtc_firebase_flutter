@@ -73,21 +73,60 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
         .doc(currentUserId)
         .snapshots()
         .listen((snapshot) {
-      if (snapshot.exists && mounted) {
-        final data = snapshot.data()!;
-        final status = data['status'] as String?;
+      if (mounted) {
+        if (!snapshot.exists) {
+          // If the call document is deleted, user should no longer see the incoming call dialog
+          if (Navigator.of(context).canPop()) {
+            // This is a bit risky if other dialogs are open, 
+            // but for this simple app it's usually the incoming call dialog.
+            // A better way would be tracker for the dialog.
+            _dismissIncomingCallDialog();
+          }
+          return;
+        }
 
-        if (status == 'ringing') {
-          _showIncomingCallDialog(
-            callId: snapshot.id,
-            callerName: data['callerName'] as String,
-            callerId: data['callerId'] as String,
-            callType: data['callType'] as String,
-            roomId: data['roomId'] as String,
-          );
+        final data = snapshot.data();
+        if (data != null) {
+          final status = data['status'] as String?;
+
+          if (status == 'ringing') {
+            _showIncomingCallDialog(
+              callId: snapshot.id,
+              callerName: data['callerName'] as String,
+              callerId: data['callerId'] as String,
+              callType: data['callType'] as String,
+              roomId: data['roomId'] as String,
+            );
+          } else if (status == 'accepted' || status == 'rejected') {
+            _dismissIncomingCallDialog();
+          }
         }
       }
     });
+  }
+
+  // void _dismissIncomingCallDialog() {
+  //   // We check if the dialog is showing.
+  //   // In Flutter, there isn't a direct way to check if a specific dialog is open
+  //   // without tracking the Route.
+  //   // For now, we'll try to pop if it's the current route.
+  //   if (mounted) {
+  //     // Navigator.of(context).popUntil((route) => route.isFirst);
+  //     // This is too aggressive.
+  //     // Better approach: track the dialog with a boolean or a Completer.
+  //   }
+  // }
+
+  // Improved dialog tracking
+  bool _isShowingIncomingDialog = false;
+  BuildContext? _incomingDialogContext;
+
+  void _dismissIncomingCallDialog() {
+    if (_isShowingIncomingDialog && _incomingDialogContext != null && mounted) {
+      Navigator.of(_incomingDialogContext!).pop();
+      _isShowingIncomingDialog = false;
+      _incomingDialogContext = null;
+    }
   }
 
   void _showIncomingCallDialog({
@@ -97,48 +136,61 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
     required String callType,
     required String roomId,
   }) {
+    if (_isShowingIncomingDialog) return;
+    _isShowingIncomingDialog = true;
+
     final isVideo = callType == 'video';
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => IncomingCallDialog(
-        callerName: callerName,
-        isVideo: isVideo,
-        onAccept: () async {
-          // Close dialog first
-          Navigator.of(dialogContext).pop();
+      builder: (dialogContext) {
+        _incomingDialogContext = dialogContext;
+        return IncomingCallDialog(
+          callerName: callerName,
+          isVideo: isVideo,
+          onAccept: () async {
+            _isShowingIncomingDialog = false;
+            _incomingDialogContext = null;
+            // Close dialog first
+            Navigator.of(dialogContext).pop();
 
-          // Update call status to accepted
-          await _firestore.collection('calls').doc(callId).update({
-            'status': 'accepted',
-            'acceptedAt': FieldValue.serverTimestamp(),
-          });
+            // Update call status to accepted
+            await _firestore.collection('calls').doc(callId).update({
+              'status': 'accepted',
+              'acceptedAt': FieldValue.serverTimestamp(),
+            });
 
-          // Navigate to video call screen using the main context
-          if (mounted) {
-            Navigator.of(context).pushNamed(
-              '/video_call',
-              arguments: {
-                'roomId': roomId,
-                'isVideo': isVideo,
-                'isJoining': true,
-              },
-            );
-          }
-        },
-        onReject: () async {
-          // Close dialog first
-          Navigator.of(dialogContext).pop();
+            // Navigate to video call screen using the main context
+            if (mounted) {
+              Navigator.of(context).pushNamed(
+                '/video_call',
+                arguments: {
+                  'roomId': roomId,
+                  'isVideo': isVideo,
+                  'isJoining': true,
+                },
+              );
+            }
+          },
+          onReject: () async {
+            _isShowingIncomingDialog = false;
+            _incomingDialogContext = null;
+            // Close dialog first
+            Navigator.of(dialogContext).pop();
 
-          // Update call status to rejected
-          await _firestore.collection('calls').doc(callId).update({
-            'status': 'rejected',
-            'rejectedAt': FieldValue.serverTimestamp(),
-          });
-        },
-      ),
-    );
+            // Update call status to rejected
+            await _firestore.collection('calls').doc(callId).update({
+              'status': 'rejected',
+              'rejectedAt': FieldValue.serverTimestamp(),
+            });
+          },
+        );
+      },
+    ).then((_) {
+      _isShowingIncomingDialog = false;
+      _incomingDialogContext = null;
+    });
   }
 
   Future<void> _initiateCall({
