@@ -40,6 +40,12 @@ class UserModel extends UserEntity {
       DocumentSnapshot<Map<String, dynamic>> snapshot,
       ) {
     final data = snapshot.data()!;
+    Timestamp? parseTimestamp(String key) {
+      if (data[key] != null && data[key] is Timestamp) {
+        return data[key] as Timestamp;
+      }
+      return null;
+    }
     return UserModel(
       id: snapshot.id,
       email: data['email'] as String,
@@ -47,13 +53,9 @@ class UserModel extends UserEntity {
       profileImage: data['profileImage'] as String?,
       phoneNumber: data['phoneNumber'] as String?,
       status: data['status'] as String? ?? AppConstants.userStatusOffline,
-      lastSeen: (data['lastSeen'] as Timestamp).toDate(),
-      createdAt: data['createdAt'] != null
-          ? (data['createdAt'] as Timestamp).toDate()
-          : null,
-      updatedAt: data['updatedAt'] != null
-          ? (data['updatedAt'] as Timestamp).toDate()
-          : null,
+      lastSeen: parseTimestamp('lastSeen')?.toDate() ?? DateTime.now(),
+      createdAt: parseTimestamp('createdAt')?.toDate() ?? DateTime.now(),
+      updatedAt: parseTimestamp('updatedAt')?.toDate() ?? DateTime.now(),
       isOnline: data['isOnline'] as bool? ?? false,
       fcmToken: data['fcmToken'] as String?,
       metadata: data['metadata'] as Map<String, dynamic>?,
@@ -69,8 +71,8 @@ class UserModel extends UserEntity {
       'phoneNumber': phoneNumber,
       'status': status,
       'lastSeen': Timestamp.fromDate(lastSeen),
-      'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : null,
-      'updatedAt': updatedAt != null ? Timestamp.fromDate(updatedAt!) : null,
+      'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : DateTime.now(),
+      'updatedAt': updatedAt != null ? Timestamp.fromDate(updatedAt!) : DateTime.now(),
       'isOnline': isOnline,
       'fcmToken': fcmToken,
       'metadata': metadata,
