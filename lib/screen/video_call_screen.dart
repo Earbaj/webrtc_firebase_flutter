@@ -59,6 +59,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   Timer? _callTimer;
   int _callDuration = 0;
 
+  Offset _pipPosition = const Offset(20, 20);
+  bool _isRemoteFull = true;
+
   @override
   void initState() {
     super.initState();
@@ -474,15 +477,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Remote Video (Full Screen)
-            if (_remoteRenderer.srcObject != null)
-              Positioned.fill(
-                child: RTCVideoView(
-                  _remoteRenderer,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                ),
-              )
-            else
+            // Dynamic Video View (Full Screen)
+            Positioned.fill(
+              child: RTCVideoView(
+                _isRemoteFull ? _remoteRenderer : _localRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                mirror: !_isRemoteFull,
+              ),
+            ),
+
+            // Full Screen Overlay when no remote video
+            if (_isRemoteFull && _remoteRenderer.srcObject == null)
               Container(
                 color: Colors.black,
                 child: Center(
@@ -516,35 +521,57 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 ),
               ),
 
-            // Local Video (Picture-in-Picture)
-            if (widget.isVideo && _localRenderer.srcObject != null)
+            // Local/Remote Video (Picture-in-Picture) - Movable
+            if (widget.isVideo &&
+                (_isRemoteFull
+                    ? _localRenderer.srcObject != null
+                    : _remoteRenderer.srcObject != null))
               Positioned(
-                top: 20,
-                right: 20,
-                child: Container(
-                  width: 120,
-                  height: 160,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white, width: 2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: _isVideoOff
-                        ? Container(
-                      color: Colors.grey.shade900,
-                      child: const Center(
-                        child: Icon(
-                          Icons.videocam_off,
-                          color: Colors.white,
-                          size: 40,
+                top: _pipPosition.dy,
+                right: _pipPosition.dx,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    setState(() {
+                      _pipPosition += Offset(-details.delta.dx, details.delta.dy);
+                    });
+                  },
+                  onTap: () {
+                    setState(() {
+                      _isRemoteFull = !_isRemoteFull;
+                    });
+                  },
+                  child: Container(
+                    width: 120,
+                    height: 160,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white, width: 2),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 10,
+                          offset: const Offset(0, 5),
                         ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: (_isRemoteFull ? _isVideoOff : false) // Assume remote video is never "off" in this logic for now
+                          ? Container(
+                        color: Colors.grey.shade900,
+                        child: const Center(
+                          child: Icon(
+                            Icons.videocam_off,
+                            color: Colors.white,
+                            size: 40,
+                          ),
+                        ),
+                      )
+                          : RTCVideoView(
+                        _isRemoteFull ? _localRenderer : _remoteRenderer,
+                        mirror: _isRemoteFull,
+                        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                       ),
-                    )
-                        : RTCVideoView(
-                      _localRenderer,
-                      mirror: true,
-                      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                     ),
                   ),
                 ),
