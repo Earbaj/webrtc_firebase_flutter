@@ -93,6 +93,7 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
             _showIncomingCallDialog(
               callId: snapshot.id,
               callerName: data['callerName'] as String,
+              callerEmail: data['callerEmail'] as String? ?? 'No email',
               callerId: data['callerId'] as String,
               callType: data['callType'] as String,
               roomId: data['roomId'] as String,
@@ -132,6 +133,7 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
   void _showIncomingCallDialog({
     required String callId,
     required String callerName,
+    required String callerEmail,
     required String callerId,
     required String callType,
     required String roomId,
@@ -169,6 +171,8 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                   'roomId': roomId,
                   'isVideo': isVideo,
                   'isJoining': true,
+                  'callerName': callerName,
+                  'callerEmail': callerEmail,
                 },
               );
             }
@@ -220,6 +224,7 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
       await _firestore.collection('calls').doc(receiverId).set({
         'callerId': currentUserId,
         'callerName': _currentUserName ?? 'Unknown',
+        'callerEmail': _auth.currentUser?.email ?? '',
         'callType': isVideo ? 'video' : 'audio',
         'roomId': roomId,
         'status': 'ringing',
@@ -237,6 +242,7 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
           'isJoining': false,
           'receiverId': receiverId,
           'receiverName': receiverName,
+          'receiverEmail': receiverEmail,
         },
       );
     } catch (e) {

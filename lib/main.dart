@@ -41,6 +41,9 @@ class MyApp extends StatelessWidget {
             isJoining: args['isJoining'],
             receiverId: args['receiverId'],
             receiverName: args['receiverName'],
+            receiverEmail: args['receiverEmail'],
+            callerName: args['callerName'],
+            callerEmail: args['callerEmail'],
           );
         },
       },

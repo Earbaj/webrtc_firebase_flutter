@@ -10,6 +10,9 @@ class VideoCallScreen extends StatefulWidget {
   final bool isJoining;
   final String? receiverId;
   final String? receiverName;
+  final String? receiverEmail;
+  final String? callerName;
+  final String? callerEmail;
 
   const VideoCallScreen({
     super.key,
@@ -18,6 +21,9 @@ class VideoCallScreen extends StatefulWidget {
     required this.isJoining,
     this.receiverId,
     this.receiverName,
+    this.receiverEmail,
+    this.callerName,
+    this.callerEmail,
   });
 
   @override
@@ -50,6 +56,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   StreamSubscription<DocumentSnapshot>? _callSubscription;
 
   Timer? _connectionTimeout;
+  Timer? _callTimer;
+  int _callDuration = 0;
 
   @override
   void initState() {
@@ -195,6 +203,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   void _cleanup() {
     _connectionTimeout?.cancel();
+    _callTimer?.cancel();
     _roomSubscription?.cancel();
     _answerCandidatesSubscription?.cancel();
     _offerCandidatesSubscription?.cancel();
@@ -258,6 +267,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           _isConnected = true;
         });
         _connectionTimeout?.cancel();
+        _startCallTimer();
       }
     };
 
@@ -277,6 +287,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       print('🌐 ICE connection state: $state');
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
         setState(() => _isConnected = true);
+        _startCallTimer();
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
           state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
         setState(() => _isConnected = false);
@@ -434,7 +445,25 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
   }
 
+  void _startCallTimer() {
+    if (_callTimer != null) return;
+    _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        setState(() {
+          _callDuration++;
+        });
+      }
+    });
+  }
+
+  String _formatDuration(int seconds) {
+    int minutes = seconds ~/ 60;
+    int remainingSeconds = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${remainingSeconds.toString().padLeft(2, '0')}';
+  }
+
   void _endCall() {
+    _callTimer?.cancel();
     Navigator.pop(context);
   }
 
@@ -540,20 +569,27 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 ),
                 child: Row(
                   children: [
-                    if (!widget.isJoining) ...[
-                      CircleAvatar(
-                        backgroundColor: Colors.blue,
-                        child: Text(
-                          widget.receiverName?.substring(0, 1).toUpperCase() ?? 'U',
-                          style: const TextStyle(color: Colors.white),
-                        ),
+                    CircleAvatar(
+                      backgroundColor: Colors.blue,
+                      child: Text(
+                        (widget.isJoining
+                                ? widget.callerName?.substring(0, 1)
+                                : widget.receiverName?.substring(0, 1))
+                            ?.toUpperCase() ??
+                            'U',
+                        style: const TextStyle(color: Colors.white),
                       ),
-                      const SizedBox(width: 12),
-                      Column(
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            widget.receiverName ?? 'Unknown',
+                            (widget.isJoining
+                                    ? widget.callerName
+                                    : widget.receiverName) ??
+                                'Unknown',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 18,
@@ -561,15 +597,44 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                             ),
                           ),
                           Text(
-                            _isConnected ? 'Connected' : 'Connecting...',
+                            (widget.isJoining
+                                    ? widget.callerEmail
+                                    : widget.receiverEmail) ??
+                                'No email',
                             style: TextStyle(
-                              color: _isConnected ? Colors.green : Colors.orange,
-                              fontSize: 14,
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 12,
                             ),
                           ),
                         ],
                       ),
-                    ],
+                    ),
+                    if (_isConnected)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.5),
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: Text(
+                          _formatDuration(_callDuration),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      )
+                    else
+                      Text(
+                        'Connecting...',
+                        style: TextStyle(
+                          color: Colors.orange,
+                          fontSize: 14,
+                        ),
+                      ),
                   ],
                 ),
               ),
