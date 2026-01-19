@@ -259,57 +259,145 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
     final currentUserId = _auth.currentUser!.uid;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Video Call App'),
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _logout,
-          ),
-        ],
-      ),
+      backgroundColor: Colors.grey.shade50,
       body: Column(
         children: [
-          // Current User Info
+          // Custom Gradient Header (Modern AppBar replacement)
           Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            color: Colors.blue.shade50,
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 25,
-                  backgroundColor: Colors.blue,
-                  child: Text(
-                    _currentUserName?.substring(0, 1).toUpperCase() ?? 'U',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 10,
+              bottom: 25,
+              left: 20,
+              right: 20,
+            ),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.blue.shade600,
+                  Colors.indigo.shade700,
+                ],
+              ),
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(35),
+                bottomRight: Radius.circular(35),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.blue.withOpacity(0.3),
+                  blurRadius: 15,
+                  offset: const Offset(0, 10),
                 ),
-                const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              ],
+            ),
+            child: Column(
+              children: [
+                // Top Row: App Title & Logout
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      _currentUserName ?? 'Loading...',
-                      style: const TextStyle(
-                        fontSize: 18,
+                    const Text(
+                      'VideoCall App',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
                         fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
                       ),
                     ),
-                    Text(
-                      _auth.currentUser?.email ?? '',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.shade600,
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.logout, color: Colors.white),
+                        onPressed: _logout,
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 25),
+                // User Profile Row
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.3),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: CircleAvatar(
+                        radius: 32,
+                        backgroundColor: Colors.white,
+                        child: Text(
+                          _currentUserName?.substring(0, 1).toUpperCase() ?? 'U',
+                          style: TextStyle(
+                            color: Colors.blue.shade700,
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Welcome back,',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.8),
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            _currentUserName ?? 'User',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            _auth.currentUser?.email ?? '',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Users Section Title
+          Padding(
+            padding: const EdgeInsets.fromLTRB(25, 25, 25, 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Explore Users',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D3243),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {},
+                  child: Text(
+                    'View All',
+                    style: TextStyle(color: Colors.blue.shade600),
+                  ),
                 ),
               ],
             ),
@@ -332,14 +420,25 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                 }
 
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return const Center(
-                    child: Text('No other users available'),
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.group_off, size: 60, color: Colors.grey.shade400),
+                        const SizedBox(height: 10),
+                        Text(
+                          'No other users available',
+                          style: TextStyle(color: Colors.grey.shade600),
+                        ),
+                      ],
+                    ),
                   );
                 }
 
                 final users = snapshot.data!.docs;
 
                 return ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   itemCount: users.length,
                   itemBuilder: (context, index) {
                     final userData = users[index].data() as Map<String, dynamic>;
@@ -348,90 +447,125 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
                     final isOnline = userData['isOnline'] as bool? ?? false;
                     final userId = userData['uid'] as String;
 
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 15),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.04),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
                       ),
-                      child: ListTile(
-                        leading: Stack(
-                          children: [
-                            CircleAvatar(
-                              radius: 25,
-                              backgroundColor: Colors.blue.shade300,
-                              child: Text(
-                                userName.substring(0, 1).toUpperCase(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            if (isOnline)
-                              Positioned(
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  width: 14,
-                                  height: 14,
-                                  decoration: BoxDecoration(
-                                    color: Colors.green,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(20),
+                          onTap: () {}, // Could expand for profile view
+                          child: Padding(
+                            padding: const EdgeInsets.all(15),
+                            child: Row(
+                              children: [
+                                // Avatar with Online Indicator
+                                Stack(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 30,
+                                      backgroundColor: Colors.blue.shade50,
+                                      child: Text(
+                                        userName.substring(0, 1).toUpperCase(),
+                                        style: TextStyle(
+                                          color: Colors.blue.shade600,
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
                                     ),
+                                    Positioned(
+                                      right: 2,
+                                      bottom: 2,
+                                      child: Container(
+                                        width: 16,
+                                        height: 16,
+                                        decoration: BoxDecoration(
+                                          color: isOnline ? Colors.green : Colors.grey.shade400,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: Colors.white,
+                                            width: 2.5,
+                                          ),
+                                          boxShadow: [
+                                            if (isOnline)
+                                              BoxShadow(
+                                                color: Colors.green.withOpacity(0.4),
+                                                blurRadius: 4,
+                                                spreadRadius: 1,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(width: 15),
+                                // User Info
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        userName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 17,
+                                          color: Color(0xFF2D3243),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        userEmail,
+                                        style: TextStyle(
+                                          color: Colors.grey.shade500,
+                                          fontSize: 13,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ),
-                          ],
-                        ),
-                        title: Text(
-                          userName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                          ),
-                        ),
-                        subtitle: Text(
-                          userEmail,
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 14,
-                          ),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Audio Call Button
-                            IconButton(
-                              icon: const Icon(Icons.call),
-                              color: Colors.green,
-                              iconSize: 28,
-                              onPressed: () => _initiateCall(
-                                receiverId: userId,
-                                receiverName: userName,
-                                receiverEmail: userEmail,
-                                isVideo: false,
-                              ),
-                              tooltip: 'Audio Call',
+                                // Call Actions
+                                Row(
+                                  children: [
+                                    _buildActionIcon(
+                                      icon: Icons.call_outlined,
+                                      color: Colors.green,
+                                      onPressed: () => _initiateCall(
+                                        receiverId: userId,
+                                        receiverName: userName,
+                                        receiverEmail: userEmail,
+                                        isVideo: false,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    _buildActionIcon(
+                                      icon: Icons.videocam_outlined,
+                                      color: Colors.blue,
+                                      onPressed: () => _initiateCall(
+                                        receiverId: userId,
+                                        receiverName: userName,
+                                        receiverEmail: userEmail,
+                                        isVideo: true,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            // Video Call Button
-                            IconButton(
-                              icon: const Icon(Icons.videocam),
-                              color: Colors.blue,
-                              iconSize: 28,
-                              onPressed: () => _initiateCall(
-                                receiverId: userId,
-                                receiverName: userName,
-                                receiverEmail: userEmail,
-                                isVideo: true,
-                              ),
-                              tooltip: 'Video Call',
-                            ),
-                          ],
+                          ),
                         ),
                       ),
                     );
@@ -441,6 +575,28 @@ class _UsersListScreenState extends State<UsersListScreen> with WidgetsBindingOb
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildActionIcon({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: IconButton(
+        icon: Icon(icon, color: color),
+        iconSize: 22,
+        onPressed: onPressed,
+        constraints: const BoxConstraints(
+          minWidth: 44,
+          minHeight: 44,
+        ),
       ),
     );
   }
