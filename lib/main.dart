@@ -1,39 +1,69 @@
-import 'dart:async';
-
-import 'package:cloud_firestore/cloud_firestore.dart';
+/// Standard Flutter and Firebase imports
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+
+/// Local service and screen imports
+import 'package:webrtc_flutter/notification_service.dart';
 import 'package:webrtc_flutter/screen/auth_screen.dart';
 import 'package:webrtc_flutter/screen/user_list_screen.dart';
 import 'package:webrtc_flutter/screen/video_call_screen.dart';
 
+/// Controller and configuration imports
 import 'controller/auth_controller_riverpod.dart';
+import 'fcm_service.dart';
 import 'firebase_options.dart';
 
+/// The entry point of the Flutter application.
 void main() async {
+  // Ensures that widget binding is initialized before calling native code (like Firebase).
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase using the generated options for the current platform (Android/iOS).
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  runApp(ProviderScope(child: const MyApp()));
+
+  // Initialize the general notification service to handle permissions.
+  NotificationService service = NotificationService();
+  service.requestNotificationPermission();
+
+  // Create a GlobalKey for the navigator. 
+  // This allows us to navigate between screens from anywhere in the app 
+  // (like inside a service class) without needing a BuildContext.
+  final navigatorKey = GlobalKey<NavigatorState>();
+
+  // Initialize the Firebase Cloud Messaging (FCM) handler with the navigator key.
+  // This service handles incoming push notifications, especially for calls.
+  FCMHandlerService().initialize(navKey: navigatorKey);
+
+  // Wrap the entire app in a ProviderScope for Riverpod state management.
+  runApp(ProviderScope(child: MyApp(navigatorKey: navigatorKey,)));
 }
 
+/// The root widget of the application.
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final GlobalKey<NavigatorState> navigatorKey;
+  const MyApp({super.key, required this.navigatorKey});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      // Assign the global navigator key to the MaterialApp.
+      navigatorKey: navigatorKey,
       title: 'Flutter WebRTC Demo',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
+      // AuthWrapper determines whether to show the login screen or the home screen.
       home: const AuthWrapper(),
+      // Define named routes for navigation.
       routes: {
         '/video_call': (context) {
+          // Extract arguments passed during navigation to the video call screen.
           final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
           return VideoCallScreen(
             roomId: args['roomId'],
@@ -51,16 +81,18 @@ class MyApp extends StatelessWidget {
   }
 }
 
-
-//auth wrapper in traditional way
+/// A wrapper widget that listens to the authentication state.
+/// If a user is logged in, it shows the UserListScreen; otherwise, it shows the AuthScreen.
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
+      // Listen to a stream of authentication state changes (login/logout).
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
+        // Show a loading indicator while waiting for the initial auth state.
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(
@@ -69,11 +101,11 @@ class AuthWrapper extends StatelessWidget {
           );
         }
 
+        // If data exists, the user is logged in.
         if (snapshot.hasData) {
-          // User is logged in
           return const UsersListScreen();
         } else {
-          // User is not logged in
+          // If no data, the user is logged out or hasn't logged in yet.
           return const AuthScreen();
         }
       },
@@ -81,12 +113,13 @@ class AuthWrapper extends StatelessWidget {
   }
 }
 
-// auth_wrapper from river pod way
+/// An alternative AuthWrapper using Riverpod for state management.
 class RiverPodAuthWrapper extends ConsumerWidget {
   const RiverPodAuthWrapper({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Watch the auth state provider.
     final authState = ref.watch(authStateChangesProvider);
 
     return authState.when(
@@ -97,6 +130,7 @@ class RiverPodAuthWrapper extends ConsumerWidget {
         body: Center(child: Text('Error: $error')),
       ),
       data: (user) {
+        // Return AuthScreen if user is null, otherwise return UsersListScreen.
         return user == null ? const AuthScreen() : const UsersListScreen();
       },
     );
